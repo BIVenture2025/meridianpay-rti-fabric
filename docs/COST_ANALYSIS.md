@@ -163,7 +163,7 @@ be misread the same way.
 
 ---
 
-## 7. Session 8 addendum — closed 2026-08-19, after publishing
+## 7. Session 8 addendum — closed 2026-08-20, after publishing
 
 The publishing session was captured. The row is restated over **6 of 8** sessions.
 
@@ -174,39 +174,62 @@ The publishing session was captured. The row is restated over **6 of 8** session
   [+] SUBAGENTS: 9 transcript(s) across sessions 7, 8 - 66,167,251 cache-read,
       real spend on the same task, NOT included in the totals below.
 
-| 25 Meridian Pay | 6 | 8.6 | 1,623 | 986 | 15% | 379,013,063 | 2,054,625 | 233,526 |
+| 25 Meridian Pay | 6 | 9.7 | 1,852 | 1,133 | 13% | 468,130,528 | 2,274,382 | 252,770 |
 ```
 
 | Session 8 | Figure |
 |---|--:|
-| Active working time | **1.1 h** over 2 sittings |
-| Assistant turns | 208 |
-| Tool calls | 145 · browser **0%** |
-| Cache-read | 30,377,814 |
-| **Cache-read per turn** | **146,047** |
+| Active working time | **2.2 h** over 4 sittings |
+| Assistant turns | 437 |
+| Tool calls | 273 · browser **0%** |
+| Cache-read | 119,495,279 |
+| **Cache-read per turn** | **273,445** |
 | Subagent transcripts | 6, carrying **44,256,711** cache-read |
 
-**Three things this addendum records rather than smooths over.**
+### A correction, and it is the interesting part
 
-**One — the lowest cost-per-turn of the project is its last session, which is the wrong direction for
-the hypothesis this engine used to hold.** `cache_read_per_turn` across the six captured sessions now
-reads 204,882 · 205,323 · **320,794** · 233,059 · 228,648 · **146,047**. It does not rise with session
-number, and the excursion is still the *longest* session rather than the latest. C6 withdrew the cost
-half of the split-session claim on five points; this is a sixth, pointing the same way.
+> **This section first said Session 8 had the *lowest* cache-read per turn of the project at
+> 146,047, and called that a sixth data point against the split-session hypothesis.**
+>
+> **That was measured mid-session and it did not survive.** The session ran on for another 229 turns
+> — a portfolio card rebuild, a diagram rebuild, four publishing defects and three pushes — and the
+> final figure is **273,445**, the *second highest* of the six captured sessions rather than the
+> lowest. The claim is withdrawn. It is left visible here rather than edited away, because a cost
+> figure quoted before its session ended is a floor being read as a total, which is the exact defect
+> §1 of this document is about.
 
-**Two — the subagent spend on this session exceeds the session's own visible spend.** Six QA and
-research agents carried 44.3M cache-read against the session's 30.4M. Three adversarial visual-QA
-passes over seventeen rendered slides are most of it, and they found eleven, then eleven more, then
-six defects that re-reading the generator had not produced. That is a real cost and a real return, and
+**What the corrected column actually shows:**
+
+| Session | Hours | Cache-read per turn |
+|---|--:|--:|
+| 1 | 0.9 | 204,882 |
+| 2 | 1.9 | 205,323 |
+| **3** | **3.3** | **320,794** |
+| 6 | 0.5 | 233,059 |
+| 7 | 0.9 | 228,648 |
+| **8** | **2.2** | **273,445** |
+
+**The two highest figures are the two longest sessions, and the last session is not the highest.**
+Session number does not order this column; session *length* nearly does, with Session 2 (1.9 h at
+205,323) as the exception that stops it being a clean relationship. **Six points with two holes is
+still a shape, not a test** — but the shape it makes is "long sessions cost more per turn", not
+"later sessions cost more per turn", and only the second of those was ever the engine's claim. C6's
+withdrawal of the cost half of the split-session argument stands, on better evidence than before.
+
+**Two things this addendum records rather than smooths over.**
+
+**One — the subagent spend is a third of the session's own visible spend.** Six QA and research
+agents carried 44.3M cache-read against the session's 119.5M. Most of it is three adversarial
+visual-QA passes over seventeen rendered slides, which returned eleven, then eleven, then six
+defects that re-reading the generator had not produced. That is a real cost with a real return, and
 it is counted **separately** — folding it in would silently change what every earlier snapshot means.
 
-**Three — the first capture of this session was taken with a stale copy of the tool and was wrong.**
+**Two — the first capture of this session was taken with a stale copy of the tool and was wrong.**
 The snapshot it wrote carried no `partial` flag, no compaction record and no subagent count, and it
 looked completely clean. The staged copy of `capture_session_cost.py` in the container was the
 *pre-fix* version; the fixed one had been committed to the device earlier the same day. It was caught
 by reading the JSON for the three fields Skill 11 says to read, not by anything the tool printed.
 
-> **A tool that was fixed is not the same as a tool you are running.** The snapshot was rewritten with
-> the correct binary and the discarded one is not in `_cost/`. This is the fourth instrument in this
-> project to report a clean result it had not earned, and the first to do it by being the wrong copy
-> rather than by being wrong.
+> **A tool that was fixed is not the same as a tool you are running.** This is the fourth instrument
+> in this project to report a clean result it had not earned, and the first to do it by being the
+> wrong copy rather than by being wrong.
