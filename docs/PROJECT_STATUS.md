@@ -1,24 +1,33 @@
 # PROJECT_STATUS.md — plan vs built, honestly
 
 **Project 25 · Meridian Pay · Fabric End-to-End Real-Time Payments Risk**
-Status as at **2026-08-19, close of Session 8** · required by `OUTCOME_CONTRACT.md` §7
+Status as at **2026-08-20, published** · required by `OUTCOME_CONTRACT.md` §7
 
 > This file exists because Project 23 was labelled `PLANNING` for months after it had been built and
 > published, and had itself flagged the label as an outstanding fix. **A status file that is not
 > current is worse than none**, so this one carries its date in the first line and names what is
 > unfinished before it names what is done.
 
-## Status: **PACKAGED — everything is written and gated. Publication is three scripts away, and they run on your machine, not mine.**
+## Status: **PUBLISHED — 2026-08-20.**
 
-**It is deliberately not marked PUBLISHED.** Nothing is on GitHub yet. A status file that claims a
-state the world does not show is the exact defect this file was created to stop — Project 23 read
-`PLANNING` for months after it was live, and this one is not going to read `PUBLISHED` before it is.
+Live, and each of these was read back rather than assumed:
 
 | | |
 |---|---|
+| Repository | <https://github.com/BIVenture2025/meridianpay-rti-fabric> — public, 89 files, 6 folders |
+| Guide | `…/meridianpay-rti-fabric/docs/guide.html` — 9 steps, 9 figures, a **Get the code** section with a working ZIP link |
+| Architecture · Closure | `…/docs/ARCHITECTURE.html` · `…/docs/CLOSURE.html` — the closure page carries all **9** tabs |
+| Portfolio card | `biventure2025.github.io` — card **05**, with the site-local guide copy and its eight figures |
+
+**One thing is NOT independently verified:** that the portfolio card *renders* on the live site. The
+card is JavaScript-rendered from `data.js`, the fetch tool cannot execute it, and this container
+cannot reach the host to drive a browser. The same `data.js` and `index.html` bytes were rendered
+locally and the card was correct; the live render was left to the author's own eyes, and is recorded
+here as that rather than as a check that was run.
+
 | Phases 0–5 | **complete** |
 | Phase 6 (Closure, Skill 10) | **complete** — C1, C2, C3, C5, C6, C7, C8 written; `Project25_Closure.html` built |
-| Phase 7 (Publishing, Skill 9) | **complete as far as this machine can take it** — portfolio card, 89-file repository, rebuild guide and pitch deck all built and gated. Three PowerShell scripts remain, and they need your network and your git credentials |
+| Phase 7 (Publishing, Skill 9) | **complete.** Portfolio card, 89-file repository, rebuild guide and pitch deck built, gated and pushed 2026-08-19/20 |
 | Export checkpoints | E1 ◐ · E2 ◐ · **E3 ✅ CLOSED 2026-08-19, 7 of 7** — see below |
 | Live estate | **up.** Trial capacity `FTL64`; the Eventhouse, dashboard, model, report and four Activator reflexes are all running |
 
@@ -72,7 +81,7 @@ instinct pushes toward Bronze/Silver/Gold notebooks, this project used one.
 | GitHub repository | **Assembled and gated at 89 files.** `check_rebuild_materials.py` returns *ALL REBUILD MATERIALS PRESENT, NON-EMPTY AND SCRUBBED*, 0 BLOCK instances |
 | Rebuild guide | **Built.** 9 steps, 17 traps, 9 figures, 13 anchors. Written to both the repository (`docs/guide.html`) and the Website folder (`fabric-meridianpay-guide.html`), with its eight figures |
 | Pitch deck | **Built.** 9 core slides plus appendices A1–A8; three rounds of adversarial visual QA on the rendered slides |
-| **Publication** | **NOT DONE.** `build_p25_repo.ps1` → `publish_p25_to_github.ps1` → enable Pages at branch `main`, folder `/ (root)` → `publish_site_update.ps1`. `RUN_THIS_TO_PUBLISH.md` is the instruction sheet |
+| **Publication** | **DONE, 2026-08-20**, in three pushes: the repository, a correction to it, and the portfolio card. Pages serves branch `main`, folder `/ (root)`. `RUN_THIS_TO_PUBLISH.md` now carries the *update* path as well as the first-publish one |
 
 ### Fabric source control
 
