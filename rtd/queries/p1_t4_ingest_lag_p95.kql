@@ -1,0 +1,8 @@
+// P1 T4 -- Ingest lag p95, seconds  [stat]
+// clock_skew_seconds = datetime_diff('second', ingest_time, event_time), computed
+// once by the telemetry_curated update policy. Read, never recomputed.
+// This is pipeline freshness, not device clock drift -- DQ rule 4 owns the latter.
+let as_of = _endTime;
+telemetry_curated
+| where trusted_time between (_startTime .. as_of)
+| summarize Value = round(percentile(clock_skew_seconds, 95), 1)

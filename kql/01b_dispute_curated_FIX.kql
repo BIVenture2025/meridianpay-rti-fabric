@@ -1,0 +1,187 @@
+// ============================================================================
+// Project 25 (Meridian Pay) -- Session 3, Phase 2
+// 01b_dispute_curated_FIX.kql             [2026-08-18]
+//
+// Supersedes the dispute_curated section of 01_update_policies.kql, which
+// failed with:
+//     Kusto.DataNode.Exceptions.InvalidPolicyOperationException
+//     "Request is invalid and cannot be executed."
+//
+// RUN THESE ONE STATEMENT AT A TIME (click inside a statement, press Run).
+// Statements are separated by blank lines so the Queryset picks up exactly one
+// per Run.
+//
+// ---------------------------------------------------------------------------
+// WHY IT FAILED -- CORRECTED 2026-08-18, SECOND DIAGNOSIS
+//
+// FIRST DIAGNOSIS, WRONG: "an update policy query may only read its declared
+// Source table, and this one joined auth_curated." Recorded here rather than
+// erased, because it was wrong in an instructive way -- it fit the evidence
+// available at the time (the two working policies read one table each; this
+// one read two), and it was CONFIRMED by nothing. Removing the join did not
+// fix the error, which is what disproved it. Kusto update policies CAN read
+// other tables.
+//
+// ACTUAL CAUSE: schema mismatch. The policy's query returns 6 columns; the
+// target table still has 9, because 01_update_policies.kql created
+// dispute_curated with three extra columns (original_event_time,
+// auth_age_at_dispute_days, maturity_cohort) and .create-merge -- used in the
+// first version of this fix -- adds columns but NEVER REMOVES them. Kusto
+// raises the same InvalidPolicyOperationException for a schema mismatch as for
+// an invalid query, which is exactly why the first diagnosis survived as long
+// as it did. The lesson is the engine's own: an error code shared by several
+// causes is not a diagnosis, and "it fits" is not "it is confirmed."
+//
+// The redesign below (cohort at query time, not stored) is kept REGARDLESS,
+// because it was right on its own merits even though the reason I first gave
+// for it was not:
+//
+//   An update policy fires per ingestion batch, against whatever is in the
+//   database AT THAT MOMENT. Stamping maturity_cohort at ingest time freezes
+//   an answer that is supposed to move. A dispute ingested before its original
+//   auth lands would be written 'unresolved_original_missing' PERMANENTLY --
+//   the policy never re-runs to correct it. Worse, cohort is a function of
+//   ELAPSED TIME: a dispute that is 'partially_matured_T60_T30' today becomes
+//   'graded_T90_T60' thirty days later. A stored column cannot express that.
+//   It would have gone stale silently and shown a confidently wrong number on
+//   the Alert Precision page -- exactly the defect contract Sec5 exists to
+//   prevent ("reporting precision across an ungraded cohort is the defect this
+//   design exists to avoid").
+//
+// So cohort moves from a STORED COLUMN to a QUERY-TIME FUNCTION, which is
+// always correct because it reads the data as it stands when asked. This does
+// not weaken the project's structural claim -- component 4 is "KQL functions:
+// the hot path's measures", and this is precisely that. The transformation
+// layer is still update policies + materialized views + functions, with no
+// Spark notebook anywhere near it.
+// ---------------------------------------------------------------------------
+
+// ---- STEP 1 (DIAGNOSTIC FIRST -- run this and READ IT) --------------------
+// Rev 1 of this file used .drop + .create-merge here, and step 4 STILL failed
+// with InvalidPolicyOperationException. Reason: .create-merge NEVER REMOVES
+// COLUMNS. If the drop did not take effect, dispute_curated still carries the
+// three columns the old design added (original_event_time,
+// auth_age_at_dispute_days, maturity_cohort) -- so the table has 9 columns
+// while the policy's query returns 6. An update policy whose query output does
+// not match its target table's schema EXACTLY is rejected, and the error Kusto
+// raises for it is InvalidPolicyOperationException -- the same error as the
+// cross-table-join problem, which is what made the first diagnosis wrong.
+//
+// Confirm the actual shape before changing anything:
+
+dispute_curated | getschema | project ColumnName, ColumnType
+
+// EXPECT exactly 6 rows: dispute_id, auth_id, dispute_time, dispute_reason,
+// dispute_outcome, amount.
+// If you see 9 (the three extra columns above), that is the cause -- continue
+// to step 2. If you genuinely see 6, STOP: the cause is something else and
+// this fix will not help.
+
+// ---- STEP 2: force the exact schema ---------------------------------------
+// .alter table (NOT .create-merge) sets the schema to exactly this list,
+// REMOVING any column not named here. That is what makes it the right tool
+// and .create-merge the wrong one. Safe: the table holds no rows, because its
+// policy never attached, so there is no data to lose.
+
+.alter table dispute_curated (
+    dispute_id: string,
+    auth_id: string,
+    dispute_time: datetime,
+    dispute_reason: string,
+    dispute_outcome: string,
+    amount: real
+)
+
+// Re-check before moving on -- must now be 6 columns:
+//   dispute_curated | getschema | project ColumnName, ColumnType
+
+// ---- STEP 3: the transform, single-source ---------------------------------
+
+.create-or-alter function fn_transform_dispute_curated() {
+    raw_dispute_events
+    | summarize arg_max(dispute_time, *) by dispute_id
+    | project dispute_id, auth_id, dispute_time, dispute_reason,
+              dispute_outcome, amount
+}
+
+// ---- STEP 4: attach the policy --------------------------------------------
+
+.alter table dispute_curated policy update @'[{"IsEnabled":true,"Source":"raw_dispute_events","Query":"fn_transform_dispute_curated()","IsTransactional":false,"PropagateIngestionProperties":false}]'
+
+// ---- STEP 5: the cohort logic, as a query-time function -------------------
+// This is counted function 11 (it replaces fn_maturity_cohort in the 12 --
+// see the note at the end of this file). Pass as_of = datetime(2026-08-17)
+// when querying backfill data, because the generator's clock is frozen at
+// SIM_NOW and real now() drifts past it.
+//
+// Returns one row per dispute with its original auth's event_time, the auth's
+// age when disputed, and BOTH cohorts:
+//   cohort_at_dispute -- how mature the auth was when the dispute was raised
+//   cohort_now        -- how mature that auth is as of as_of. THIS is the one
+//                        the Alert Precision page groups by, and the one that
+//                        a stored column could never have kept current.
+
+.create-or-alter function fn_dispute_graded(as_of: datetime = datetime(null)) {
+    let ref_time = iff(isnull(as_of), now(), as_of);
+    dispute_curated
+    | join kind=leftouter (
+        auth_curated
+        | where event_type == 'auth'
+        | project auth_id, original_event_time = event_time, terminal_id,
+                  store_id, merchant_id, issuer_bin, auth_amount = amount
+      ) on auth_id
+    | extend age_at_dispute_days = todouble(datetime_diff('day', dispute_time, original_event_time))
+    | extend age_now_days = todouble(datetime_diff('day', ref_time, original_event_time))
+    | extend cohort_at_dispute = case(
+        isnull(original_event_time), 'unresolved_original_missing',
+        age_at_dispute_days >= 60.0, 'graded_T90_T60',
+        age_at_dispute_days >= 30.0, 'partially_matured_T60_T30',
+        'awaiting_grading_T30_T')
+    | extend cohort_now = case(
+        isnull(original_event_time), 'unresolved_original_missing',
+        age_now_days >= 60.0, 'graded_T90_T60',
+        age_now_days >= 30.0, 'partially_matured_T60_T30',
+        'awaiting_grading_T30_T')
+    | project dispute_id, auth_id, dispute_time, dispute_reason, dispute_outcome,
+              amount, original_event_time, terminal_id, store_id, merchant_id,
+              issuer_bin, age_at_dispute_days, age_now_days,
+              cohort_at_dispute, cohort_now
+}
+
+// ---- STEP 6: verify. Run each separately. ---------------------------------
+// Policy attached to all three curated tables (expect 3 rows, IsEnabled=true):
+//   .show table auth_curated policy update
+//   .show table telemetry_curated policy update
+//   .show table dispute_curated policy update
+//
+// After the backfill lands, the cohort distribution -- this is the number the
+// Alert Precision page is built on, so read it early:
+//   fn_dispute_graded(datetime(2026-08-17))
+//   | summarize disputes = count() by cohort_now
+//   | order by disputes desc
+//
+// EXPECT: no 'unresolved_original_missing' rows. Every one of the 6,715
+// disputes references an auth that exists in the 90-day backfill by
+// construction (GENERATOR_SPEC.md Sec4.3: dispute_time = auth.event_time +
+// Uniform(30,60) days, and disputes are only generated FOR auths that exist).
+// If that bucket is non-empty, either the auth ingest is incomplete or the
+// join key is wrong -- investigate before trusting any precision number.
+
+// ============================================================================
+// FUNCTION COUNT, kept honest.
+// The contract commits to 12 KQL functions. This file adds fn_dispute_graded.
+// To stay at 12 rather than quietly becoming 13, fn_maturity_cohort (04_*.kql
+// #11) is DEMOTED to a helper -- same status as fn_store_open_sessions. It
+// remains created and usable as a scalar convenience, but it is no longer one
+// of the counted 12, because nothing calls it now that fn_dispute_graded
+// returns the cohort directly alongside the row it describes.
+//
+// The counted 12 are therefore:
+//    1-4   fn_reflex1..fn_reflex4                    (04_functions.kql)
+//    5-10  fn_dq_rule1..fn_dq_rule6                  (04_functions.kql)
+//    11    fn_dispute_graded                         (this file)
+//    12    fn_issuers_for_estate_selection           (03_dim_estate_build.kql)
+// Uncounted helpers: fn_store_open_sessions, fn_maturity_cohort,
+// fn_build_dim_estate, fn_check_zero_orphan_terminals, and the three
+// fn_transform_* behind the update policies.
+// ============================================================================

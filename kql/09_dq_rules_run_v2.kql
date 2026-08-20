@@ -1,0 +1,177 @@
+// ============================================================================
+// Project 25 (Meridian Pay) -- Session 3, Phase 2
+// 09_dq_rules_run_v2.kql                  [2026-08-18]
+//
+// SUPERSEDES 05_dq_rules_run.kql, which was written before the load ran and
+// packed all six rules into ONE query with ~20 toscalar() scans over 5.4m
+// rows. This capacity has already thrown LowMemoryCondition once on a single
+// arg_max, so that shape is not safe here. Each rule below is its own
+// statement: memory-bounded, independently retryable, and if one fails the
+// other five are still recorded.
+//
+// RUN ONE STATEMENT AT A TIME. Each appends exactly one row to dq_results.
+// If a statement throttles (CapacityPolicy/Ingestion), wait 2-3 minutes and
+// re-run that one unchanged.
+//
+// Re-running a rule appends a SECOND row rather than overwriting -- that is
+// deliberate (dq_results keeps run history so a floor can be checked across
+// runs, not just on the latest). If you re-run, change run_id_ so the two are
+// distinguishable.
+// ============================================================================
+
+// ---- RULE 1: idempotent dedupe on auth_id --------------------------------
+// floor: faults_found > 0. The manifest injected 21,462 duplicates; the
+// measured distinct-key gap is 21,477. The ~15 difference is NOT a defect --
+// it is natural birthday collision among 5.36m random 40-bit auth_ids
+// (expected ~13). Recorded here so a later reader does not treat it as drift.
+// independent check: auth_curated has ZERO auth_id groups with count > 1.
+// This is the check that caught the real defect this session -- an update
+// policy dedupes per-batch only, so it silently missed 18,063 of them.
+
+.set-or-append dq_results <|
+let dupes = toscalar(fn_dq_rule1_dedupe() | summarize sum(duplicate_rows));
+let inv = toscalar(auth_curated | summarize c = count() by auth_id | where c > 1 | count);
+print run_id = 'session3-run1', run_time = now(), rule_number = int(1),
+      rule_name = 'idempotent_dedupe_auth_id',
+      rows_checked = toscalar(raw_auth_events | count),
+      faults_found = dupes,
+      independent_check_passed = (inv == 0),
+      floor_satisfied = (dupes > 0),
+      detail = bag_pack(
+        'independent_check', 'auth_curated has zero auth_id groups with count>1',
+        'residual_dupes_in_curated', inv,
+        'manifest_injected', 21462,
+        'measured_gap', dupes,
+        'note', 'gap exceeds manifest by ~15 = expected birthday collisions among 5.36m 40-bit ids')
+
+// ---- RULE 2: out-of-order reversal resolution ----------------------------
+// floor: faults_found > 0 (manifest injected 8,233).
+// independent check: among the flagged rows, TRUE event_time must still put
+// the original BEFORE its reversal. Only ingest_time was perturbed, so any
+// row failing this would mean the generator produced a genuine causality
+// violation rather than a delivery-order artefact.
+
+.set-or-append dq_results <|
+let ooo = materialize(fn_dq_rule2_out_of_order());
+let n = toscalar(ooo | count);
+let bad = toscalar(ooo | where event_time < original_event_time | count);
+print run_id = 'session3-run1', run_time = now(), rule_number = int(2),
+      rule_name = 'out_of_order_reversal_resolution',
+      rows_checked = toscalar(raw_auth_events | where event_type in ('reversal','partial_capture') | count),
+      faults_found = n,
+      independent_check_passed = (bad == 0),
+      floor_satisfied = (n > 0),
+      detail = bag_pack(
+        'independent_check', 'flagged rows must NOT be inverted in true event_time',
+        'true_time_inversions', bad,
+        'manifest_injected', 8233)
+
+// ---- RULE 3: late arrival past watermark ---------------------------------
+// floor: faults_found > 0 (manifest: 1,495 auth + 1,192 telemetry = 2,687).
+// independent check: every raw-flagged late AUTH row is also is_late_arrival
+// = true in auth_curated -- proving the flag propagated THROUGH the update
+// policy, verified by a join rather than by re-running the same filter (which
+// would trivially agree with itself).
+
+.set-or-append dq_results <|
+let late = materialize(fn_dq_rule3_late_arrival());
+let n = toscalar(late | count);
+let notflagged = toscalar(
+    late
+    | where stream == 'auth_events'
+    | join kind=inner (auth_curated | project key_id = auth_id, is_late_arrival) on key_id
+    | where is_late_arrival == false
+    | count);
+print run_id = 'session3-run1', run_time = now(), rule_number = int(3),
+      rule_name = 'late_arrival_past_watermark',
+      rows_checked = toscalar(raw_auth_events | count) + toscalar(raw_terminal_telemetry | count),
+      faults_found = n,
+      independent_check_passed = (notflagged == 0),
+      floor_satisfied = (n > 0),
+      detail = bag_pack(
+        'independent_check', 'raw-flagged late rows carry is_late_arrival=true in curated, via join',
+        'flagged_raw_but_not_curated', notflagged,
+        'manifest_injected_auth', 1495,
+        'manifest_injected_telemetry', 1192)
+
+// ---- RULE 4: device clock skew -------------------------------------------
+// floor: every terminal should show non-zero skew (manifest applied it to all
+// 1,500). A result covering materially fewer terminals means the per-terminal
+// offset did not survive ingestion.
+
+.set-or-append dq_results <|
+let skewed = toscalar(fn_dq_rule4_clock_skew() | count);
+let terminals = toscalar(stg_dim_terminal | count);
+print run_id = 'session3-run1', run_time = now(), rule_number = int(4),
+      rule_name = 'device_clock_skew',
+      rows_checked = terminals,
+      faults_found = skewed,
+      independent_check_passed = bool(null),
+      floor_satisfied = (skewed > 0),
+      detail = bag_pack(
+        'terminals_with_nonzero_skew', skewed,
+        'terminals_total', terminals,
+        'floor', 'skew must vary per terminal, not be a global constant')
+
+// ---- RULE 5: payload schema evolution ------------------------------------
+// floor: BOTH schema_version 1 and 2 must be present. A result with only one
+// era means the cutover was not captured -- which would look like clean data
+// and is exactly the false pass this floor exists to prevent.
+
+.set-or-append dq_results <|
+let v = materialize(fn_dq_rule5_schema_evolution());
+let v1 = toscalar(v | where schema_version == 1 | count);
+let v2 = toscalar(v | where schema_version == 2 | count);
+let rows_v2 = toscalar(v | where schema_version == 2 | summarize sum(row_count));
+print run_id = 'session3-run1', run_time = now(), rule_number = int(5),
+      rule_name = 'payload_schema_evolution',
+      rows_checked = toscalar(raw_auth_events | count),
+      faults_found = rows_v2,
+      independent_check_passed = bool(null),
+      floor_satisfied = (v1 > 0 and v2 > 0),
+      detail = bag_pack(
+        'schema_v1_present', v1 > 0,
+        'schema_v2_present', v2 > 0,
+        'rows_carrying_sca_flag', rows_v2,
+        'cutover', '2026-07-12, 60pct through the 90-day window')
+
+// ---- RULE 6: hot-vs-cold reconciliation ----------------------------------
+// floor: the deliberately-injected ~50-row-per-stream gap must be FOUND. A
+// zero gap here would mean the cold-path exclusion never happened, so the
+// check has nothing to prove itself against.
+
+.set-or-append dq_results <|
+let r = materialize(fn_dq_rule6_hot_cold_reconciliation());
+let gap = toscalar(r | summarize sum(abs(row_gap)));
+print run_id = 'session3-run1', run_time = now(), rule_number = int(6),
+      rule_name = 'hot_vs_cold_reconciliation',
+      rows_checked = toscalar(r | summarize sum(hot_rows)),
+      faults_found = gap,
+      independent_check_passed = bool(null),
+      floor_satisfied = (gap == 100),
+      detail = bag_pack(
+        'expected_gap', 100,
+        'measured_gap', gap,
+        'basis', '50 rows excluded from each of auth and telemetry cold path, by design',
+        'note', 'floor is EQUALITY not >0 -- the exact injected gap is known, so an approximate match would be a finding')
+
+// ============================================================================
+// VERIFY -- run each separately.
+//
+//   dq_results | where run_id == 'session3-run1' | count
+//     -> expect 6
+//
+//   dq_results
+//   | where run_id == 'session3-run1'
+//   | project rule_number, rule_name, rows_checked, faults_found,
+//             independent_check_passed, floor_satisfied
+//   | order by rule_number asc
+//
+// PASS CONDITION, stated so it cannot be fudged after the fact:
+//   * floor_satisfied must be TRUE for all six.
+//   * independent_check_passed must be TRUE for rules 1, 2, 3 (null for 4-6
+//     by design -- those have no separate downstream artefact to check
+//     against, and a fabricated one would be worse than an honest null).
+// Anything else is a finding and gets written into the handover, not
+// smoothed over.
+// ============================================================================

@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project 25 — Fabric E2E Real-Time Payments Risk</title>
+<style>
+  :root{
+    --bg:#0e1420; --panel:#161d2b; --panel2:#1c2534; --line:#2a3547;
+    --ink:#e8edf5; --ink2:#9aa8bd; --ink3:#6b7a91;
+    --new:#2dd4bf; --keep:#5b8def; --risk:#f5a524; --stop:#f2555a;
+    --r:10px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;}
+  .wrap{max-width:1240px;margin:0 auto;padding:34px 22px 70px}
+  header h1{font-size:27px;margin:0 0 6px;letter-spacing:-.4px}
+  header .sub{color:var(--ink2);font-size:14.5px;margin:0 0 4px}
+  header .meta{color:var(--ink3);font-size:12.5px;font-variant-numeric:tabular-nums}
+  .pitch{margin:22px 0 26px;padding:16px 18px;background:var(--panel);
+         border:1px solid var(--line);border-left:3px solid var(--new);border-radius:var(--r);
+         color:var(--ink);font-size:15px}
+  .pitch b{color:var(--new);font-weight:600}
+
+  nav{display:flex;gap:6px;margin:0 0 22px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  nav button{background:none;border:0;color:var(--ink3);font:inherit;font-size:14px;
+             padding:10px 15px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+  nav button:hover{color:var(--ink2)}
+  nav button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--new)}
+  section[hidden]{display:none}
+
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin:0 0 18px;font-size:12.5px;color:var(--ink2)}
+  .legend span{display:flex;align-items:center;gap:7px}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+
+  .layer{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+         padding:14px 16px;margin:0 0 10px}
+  .layer > h3{margin:0 0 3px;font-size:13px;letter-spacing:.9px;text-transform:uppercase;
+         color:var(--ink2);font-weight:600}
+  .layer > p.note{margin:0 0 12px;font-size:13px;color:var(--ink3)}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  .card{flex:1 1 190px;background:var(--panel2);border:1px solid var(--line);
+        border-radius:8px;padding:11px 13px;position:relative;min-width:180px}
+  .card.new{border-color:rgba(45,212,191,.45)}
+  .card.new::after{content:"NEW";position:absolute;top:9px;right:10px;font-size:9.5px;
+        letter-spacing:.7px;color:var(--new);font-weight:700}
+  .card.risk{border-color:rgba(245,165,36,.45)}
+  .card.risk::after{content:"AT RISK";position:absolute;top:9px;right:10px;font-size:9.5px;
+        letter-spacing:.7px;color:var(--risk);font-weight:700}
+  .card.killed{border-color:rgba(242,85,90,.45);opacity:.72}
+  .card.killed::after{content:"KILLED";position:absolute;top:9px;right:10px;font-size:9.5px;
+        letter-spacing:.7px;color:var(--stop);font-weight:700}
+  .card.killed h4{text-decoration:line-through;text-decoration-color:var(--stop)}
+  /* overflow-wrap is load-bearing: a long single-word heading (an API name) otherwise
+     collides with the absolutely-positioned badge. Caught by render check, P25 2026-08-17. */
+  .card h4{margin:0 0 4px;font-size:14px;font-weight:600;padding-right:56px;overflow-wrap:anywhere}
+  .card p{margin:0;font-size:12.5px;color:var(--ink2);line-height:1.45}
+  .card code{font-size:11.5px;color:var(--ink3);background:rgba(255,255,255,.04);
+        padding:1px 4px;border-radius:3px}
+  .arrow{text-align:center;color:var(--ink3);font-size:17px;line-height:1;margin:2px 0 8px;
+        letter-spacing:2px}
+  .loop{background:linear-gradient(90deg,rgba(45,212,191,.10),rgba(45,212,191,.02));
+        border:1px dashed rgba(45,212,191,.45);border-radius:var(--r);padding:12px 16px;
+        margin:10px 0 12px;font-size:13.5px;color:var(--ink)}
+  .loop b{color:var(--new)}
+  .stopbox{background:linear-gradient(90deg,rgba(242,85,90,.10),rgba(242,85,90,.02));
+        border:1px dashed rgba(242,85,90,.45);border-radius:var(--r);padding:12px 16px;
+        margin:10px 0 18px;font-size:13.5px;color:var(--ink)}
+  .stopbox b{color:var(--stop)}
+
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:0 0 20px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--ink2);font-size:11.5px;text-transform:uppercase;letter-spacing:.7px;font-weight:600}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  tr.hi td{background:rgba(45,212,191,.07)}
+  tr.dead td{background:rgba(242,85,90,.07)}
+  .tag{display:inline-block;font-size:10.5px;letter-spacing:.5px;font-weight:700;
+       padding:2px 7px;border-radius:20px;white-space:nowrap}
+  .t-new{background:rgba(45,212,191,.14);color:var(--new)}
+  .t-keep{background:rgba(91,141,239,.14);color:var(--keep)}
+  .t-risk{background:rgba(245,165,36,.14);color:var(--risk)}
+  .t-stop{background:rgba(242,85,90,.14);color:var(--stop)}
+
+  h2.sec{font-size:17px;margin:26px 0 10px;font-weight:600}
+  h2.sec:first-child{margin-top:4px}
+  p.lead{color:var(--ink2);font-size:14px;margin:0 0 16px;max-width:78ch}
+  .caveat{border-left:3px solid var(--risk);background:rgba(245,165,36,.06);
+          padding:11px 14px;border-radius:6px;margin:0 0 20px;font-size:13.5px;color:var(--ink2)}
+  .caveat b{color:var(--risk)}
+
+  .kpis{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 22px}
+  .kpi{flex:1 1 150px;background:var(--panel);border:1px solid var(--line);
+       border-radius:var(--r);padding:13px 15px;min-width:145px}
+  .kpi .v{font-size:23px;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.5px}
+  .kpi .l{font-size:11.5px;color:var(--ink3);margin-top:3px;line-height:1.35}
+  .kpi.accent .v{color:var(--new)}
+  .kpi.stop .v{color:var(--stop)}
+
+  .phases{position:relative;padding-left:26px}
+  .phases::before{content:"";position:absolute;left:7px;top:8px;bottom:8px;width:2px;
+       background:var(--line)}
+  .ph{position:relative;margin:0 0 14px;background:var(--panel);border:1px solid var(--line);
+      border-radius:var(--r);padding:12px 15px}
+  .ph::before{content:"";position:absolute;left:-24px;top:19px;width:11px;height:11px;
+      border-radius:50%;background:var(--panel);border:2px solid var(--line)}
+  .ph.now::before{background:var(--new);border-color:var(--new)}
+  .ph.now{border-color:rgba(45,212,191,.45)}
+  .ph.done{border-color:rgba(45,212,191,.28)}
+  .ph.done::before{background:var(--new);border-color:var(--new)}
+  .ph .hd{display:flex;justify-content:space-between;gap:12px;align-items:baseline;flex-wrap:wrap}
+  .ph h4{margin:0;font-size:14.5px;font-weight:600}
+  .ph .sess{font-size:11.5px;color:var(--ink3);white-space:nowrap}
+  .ph p{margin:5px 0 0;font-size:13px;color:var(--ink2)}
+  .ph .status{margin:5px 0 0;font-size:12.5px;color:var(--ink2)}
+  .ph .status .chk{color:var(--new);font-weight:700;margin-right:4px}
+  .ph .gate{margin-top:7px;font-size:12.5px;color:var(--ink3);border-top:1px solid var(--line);
+      padding-top:7px}
+  .ph .gate b{color:var(--ink2);font-weight:600}
+  .ph .cap{font-size:10.5px;letter-spacing:.5px;font-weight:700;padding:2px 7px;border-radius:20px;
+      background:rgba(245,165,36,.14);color:var(--risk);white-space:nowrap;margin-left:8px}
+  .ph .cap.free{background:rgba(91,141,239,.14);color:var(--keep)}
+  p.meta.status-now{color:var(--new);margin-top:4px;font-weight:500}
+
+  footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);
+         color:var(--ink3);font-size:12px}
+  @media(max-width:640px){ .card{flex:1 1 100%} .kpi{flex:1 1 45%} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Project 25 — Fabric E2E Real-Time Payments Risk</h1>
+  <p class="sub">Meridian Pay · SE-Asia card acquirer · estate built, reflexes firing, RTD live, model loaded and read back, report validated 0/0 (Session 7)</p>
+  <p class="meta">Type D platform build · architecture agreed 2026-08-17 · capacity expires ~2026-09-09 (21 days left, measured 2026-08-19) · 8 sessions planned, 7 run · regenerated at the close of Session 7</p>
+  <p class="meta status-now">Phase 6 of 7 · <b>the mirror blocker is closed and the estate is verified end to end</b>, 2026-08-19 — the OneLake availability toggle was pulled and <code>alerts</code> reads <b>186 rows on both sides, by query rather than by screenshot</b>. All <b>24 measures loaded over XMLA in one transaction, 0.7 s</b>, format strings carried by TOM, and both precision guards pass: <code>Precision (Reportable)</code> is BLANK unfiltered and <b>100.0%</b> sliced to a graded cohort — a non-blank unfiltered value would have been the failure. Reflex 3 is graded at last: <b>precision 0.163, recall 60/60</b>, with its shifted-window control returning <b>0</b> before any number went on a page, and a threshold sweep that <em>refuted the project's own explanation</em> for the false positives. <b>E3's read-back is done:</b> seven tables verified two-sided at delta 0, thirteen more reconciled by derivation, and the one deviation — §4's literal <code>.export</code> was not run — recorded with its residual risk rather than absorbed. <b>Two components are recorded as missing rather than reinterpreted:</b> the two mandatory Eventstreams were never built (10 of 11 components, DEGRADED by decision) and the RTD screenshots are the last E3 item outstanding · next: finish C4 and C8, then Session 8 — Publishing, and it needs no capacity</p>
+</header>
+
+<div class="pitch">A regional card acquirer runs 1,500 payment terminals across 600 merchants. Today fraud is caught by a nightly batch and a dead terminal is caught by the merchant phoning in. Fabric Real-Time Intelligence puts both on one event stream: authorisations and device telemetry land in an Eventhouse within seconds, every event resolves to its merchant, store and terminal, and four reflexes fire on patterns instead of on schedules. Then, when the chargebacks arrive 30 to 60 days later, <b>the same platform grades every alert it raised and publishes its own precision.</b></div>
+
+<nav role="tablist">
+  <button role="tab" aria-selected="true" data-t="arch">Architecture</button>
+  <button role="tab" aria-selected="false" data-t="comp">Components</button>
+  <button role="tab" aria-selected="false" data-t="gates">Gates</button>
+  <button role="tab" aria-selected="false" data-t="num">The numbers</button>
+  <button role="tab" aria-selected="false" data-t="ph">Phases</button>
+  <button role="tab" aria-selected="false" data-t="vs">vs P23 &amp; P24</button>
+</nav>
+
+<!-- ARCHITECTURE -->
+<section id="arch">
+<div class="legend"><span><i class="dot" style="background:var(--new)"></i> New in Project 25</span><span><i class="dot" style="background:var(--keep)"></i> Carried from P23 / P24</span><span><i class="dot" style="background:var(--risk)"></i> Behind an open gate</span><span><i class="dot" style="background:var(--stop)"></i> Killed 2026-08-17</span></div>
+<div class="layer">
+  <h3>Producers — the data does not exist until it is generated</h3>
+  <p class="note">There is no supplied source file. Unlike P23 and P24 this project generates from zero, which removes the frozen-control-totals obligation and replaces it with a harder one: the generator <em>is</em> the specification.</p>
+  <div class="row">
+    <div class="card new"><h4>Seeded generator</h4><p>Fixed seed, versioned, byte-reproducible. Proven with <code>diff -rq</code> across two independent runs — not a checksum of the data, which is how P24's determinism trap hid.</p></div>
+    <div class="card new"><h4>Notebook · backfill</h4><p>90 days of auths, 30 of telemetry, disputes and ground truth. Runs in-capacity, so it survives a closed laptop.</p></div>
+    <div class="card new"><h4>Local Python · live replay</h4><p>60× real time into the Event Hub-compatible endpoint, for the demo and screenshot window. Both routes share one generator module.</p></div>
+    <div class="card new"><h4>Landing_Manifest.csv</h4><p>Per-stream row counts, min/max event time, seed, version, injected-episode register. Every downstream count reconciles to it.</p></div></div>
+</div>
+<div class="arrow">▼</div>
+<div class="layer">
+  <h3>Ingest — Eventstream</h3>
+  <p class="note">Two mandatory streams with genuinely different shapes and rhythms; a one-stream demo is thin. Disputes are deliberately <em>not</em> a stream.</p>
+  <div class="row">
+    <div class="card new"><h4>ES_auth_events</h4><p>~60k/day. Amount, MCC, entry mode, response code, issuer BIN, latency, token, geo. The hot path.</p></div>
+    <div class="card new"><h4>ES_terminal_telemetry</h4><p>15-min heartbeat × 1,500 devices. Uptime, connectivity, battery, firmware, <b>tamper sensor</b>.</p></div>
+    <div class="card new"><h4>ES_fabric_job_events</h4><p>Real-Time Hub's own job events — the platform watching itself. Nice-to-have; the ops-page bonus.</p></div>
+    <div class="card"><h4>Disputes are a batch</h4><p>Chargebacks arrive as a daily file in reality, so they land cold-path and are raised into a KQL table for the grading join. Honest, not convenient.</p></div></div>
+</div>
+<div class="arrow">▼ &nbsp;&nbsp; ▼</div>
+<div class="layer">
+  <h3>Hot path — Eventhouse, and KQL <em>as</em> the transformation layer</h3>
+  <p class="note">The single biggest structural difference from P23 and P24: there is no Silver notebook and no Gold notebook. Update policies and materialized views do that work. <code>Spark notebooks ≤ 2</code> is the anti-drift number, and a third is a contract change.</p>
+  <div class="row">
+    <div class="card new"><h4>Raw → update policies</h4><p>4 raw tables land as delivered. Update policies type, dedupe and route on ingest — the streaming equivalent of Silver, with no orchestration to schedule.</p></div>
+    <div class="card new"><h4>Materialized views ×3</h4><p>The Gold equivalent. Aggregation maintained by the engine rather than recomputed by a job.</p></div>
+    <div class="card new"><h4>12 KQL functions</h4><p>The hot path's "measures". Reusable, parameterised, and the same definitions the Real-Time Dashboard binds to.</p></div>
+    <div class="card new"><h4>dim_estate</h4><p>Merchant → Store → Terminal → Issuer. <b>This is what the killed twin was going to be.</b> Every alert resolves through it; zero orphan terminals is an exit criterion.</p></div>
+    <div class="card new"><h4>Anomaly detection, in-engine</h4><p><code>series_decompose_anomalies</code> — reflex 4 compares each issuer BIN against <em>its own</em> baseline. On live series, no data movement, and no fixed threshold to be wrong about.</p></div>
+    <div class="card new"><h4>dq_results · alerts · ground_truth</h4><p>Three tables that make the pitch checkable: what the rules found, what the reflexes fired, and what was actually injected.</p></div></div>
+</div>
+<div class="arrow">▼ &nbsp;&nbsp; ▼ &nbsp;&nbsp; ▼</div>
+<div class="layer">
+  <h3>Cold path — the part nobody demos</h3>
+  <p class="note">A thin Lakehouse, kept for three reasons and no longer for a fourth: the twin's mandatory source requirement died with the twin.</p>
+  <div class="row">
+    <div class="card"><h4>Replay store</h4><p>The generator's output on Delta, so the estate can be rebuilt from empty without re-running against the wire.</p></div>
+    <div class="card"><h4>Dispute batch landing</h4><p>Daily chargeback file. Raised into Eventhouse for the grading join.</p></div>
+    <div class="card new"><h4>Hot-vs-cold reconciliation</h4><p>Does Eventhouse agree with the Lakehouse replay? Row counts <b>and</b> summed amounts. DQ rule 6, and a genuinely new check class for this engine.</p></div></div>
+</div>
+<div class="arrow">▼</div>
+<div class="layer">
+  <h3>Serve</h3>
+  
+  <div class="row">
+    <div class="card risk"><h4>OneLake availability → Direct Lake</h4><p>KQL tables surface as Delta, and a Direct Lake model binds to them — <b>a semantic model with no Gold notebook underneath it</b>. Gate <b>C2</b>: this engine has never demonstrated it, and the pitch depends on it.</p></div>
+    <div class="card"><h4>sm_MeridianPay_Risk</h4><p>20 DAX measures, deliberately down from P24's 45. The heavy lifting already happened in KQL.</p></div>
+    <div class="card new"><h4>Git integration · RTI ALM</h4><p>Promoted into the slot the twin vacated. P24 deselected it at intake. <b>It is also a continuous export mechanism</b> — every item definition lands on disk as it is built.</p></div></div>
+</div>
+<div class="arrow">▼</div>
+<div class="layer">
+  <h3>Consume &amp; monitor — two surfaces, two latencies, two audiences</h3>
+  <p class="note">The contrast is the portfolio story: the operator watches seconds in KQL, the manager reads minutes in DAX, and both read the same events.</p>
+  <div class="row">
+    <div class="card new"><h4>Real-Time Dashboard ×3</h4><p>Estate Health · Fraud Watch · Issuer Performance. Native, auto-refresh, parameterised. A co-hero deliverable, not a consolation prize.</p></div>
+    <div class="card"><h4>Activator ×4 reflexes</h4><p>Card-testing burst · terminal compromise · <b>terminal dark</b> · issuer degradation. P24 fired Activator on a monthly calendar; here it fires on a live stream.</p></div>
+    <div class="card"><h4>Power BI — 4 pages</h4><p>Home · <b>Alert Precision</b> · Merchant &amp; Terminal Risk · Estate Health. Only the first two are mandatory. The decomposition tree over <code>dim_estate</code> lives here.</p></div>
+    <div class="card new"><h4>Map</h4><p>Store and terminal geography. Card-present fraud is geographic. First item on the drop list, and part of no export checkpoint.</p></div></div>
+</div>
+<div class="loop"><b>The loop that makes this a platform, not a dashboard →</b> A reflex fires in seconds and writes a row to <code>alerts</code> with its maturity cohort. Thirty to sixty days later the chargeback for that authorisation lands in the cold path, joins back to the alert, and grades it. The Alert Precision page publishes precision and recall <b>by cohort</b> — and shows the ungraded cohort as <em>awaiting grading</em>, never as zero. Reflex quality is also measured against <code>ground_truth</code>, so the platform has two independent graders rather than one. Neither P23 nor P24 had an analogue for this.</div>
+<div class="stopbox"><b>Killed 2026-08-17 — Digital Twin Builder.</b> Not available in this region. It was going to model Merchant → Store → Terminal as an ontology with live time series per device. Gate <b>C1</b> caught it in Phase 0, before a single artefact existed, and the contract already said in writing what would replace it: a <code>dim_estate</code> KQL table plus a Power BI decomposition tree. Cost of the failure: <b>zero build hours</b>. P23 lost Fabric Graph mid-build, after Phase 8 had already built the edge tables.</div>
+</section>
+
+<!-- COMPONENTS -->
+<section id="comp" hidden>
+<h2 class="sec">Eleven non-negotiable components — eight new to the engine</h2>
+<p class="lead">This is a portfolio build, so the component list <em>is</em> part of the point — a reviewer counts Fabric items. That makes this ranking binding rather than advisory. P24 had three components new to the engine; this has eight, and the count survived the twin's death honestly rather than by restatement.</p>
+<table>
+<thead><tr><th class="num">#</th><th>Component</th><th>Status</th><th>Why it is non-negotiable</th></tr></thead>
+<tbody>
+<tr class="hi"><td class="num">1</td><td>Eventstream ×2 mandatory</td><td><span class="tag t-new">NEW</span></td><td>Auth and terminal telemetry. Ingest, no-code transform and fan-out, with derived streams and a custom endpoint</td></tr>
+<tr class="hi"><td class="num">2</td><td>Eventhouse / KQL Database</td><td><span class="tag t-new">NEW</span></td><td>The system of record for events. Hot, indexed, time-series native. The spine</td></tr>
+<tr class="hi"><td class="num">3</td><td>KQL update policies + materialized views</td><td><span class="tag t-new">NEW</span></td><td><b>The transformation layer.</b> This is what replaces Silver and Gold notebooks, and it is the project's structural claim</td></tr>
+<tr class="hi"><td class="num">4</td><td>KQL Queryset + 12 functions + <code>dim_estate</code></td><td><span class="tag t-new">NEW</span></td><td>The hot path's measures, and the hierarchy that resolves every alert to its merchant and store</td></tr>
+<tr class="hi"><td class="num">5</td><td>Real-Time Dashboard ×3 pages</td><td><span class="tag t-new">NEW</span></td><td>The operator's surface. Seconds, KQL, auto-refresh — a different audience from the Power BI report, deliberately</td></tr>
+<tr><td class="num">6</td><td>Activator ×4 reflexes</td><td><span class="tag t-keep">CARRIED</span></td><td>New tier, not a new item. P24 fired it on a monthly close calendar; here it fires on a live stream</td></tr>
+<tr class="hi"><td class="num">7</td><td>OneLake availability → Direct Lake model</td><td><span class="tag t-new">NEW</span></td><td>A semantic model with no Gold notebook underneath it. Behind gate <b>C2</b> — assumed, never demonstrated</td></tr>
+<tr><td class="num">8</td><td>Lakehouse — cold path only</td><td><span class="tag t-keep">CARRIED</span></td><td>Thin. Replay store, dispute batch landing, hot-vs-cold reconciliation. Its twin-source justification died with the twin</td></tr>
+<tr><td class="num">9</td><td>Power BI report — 2 mandatory pages</td><td><span class="tag t-keep">CARRIED</span></td><td>Deliberately demoted from P24's eight. Home and Alert Precision are mandatory; the other two are the drop list</td></tr>
+<tr class="hi"><td class="num">10</td><td>Stream DQ framework ×6 rules</td><td><span class="tag t-new">NEW</span></td><td>A new <em>problem class</em>, not a new item. Two of the six have no batch analogue at all</td></tr>
+<tr class="hi"><td class="num">11</td><td>Git integration · RTI ALM</td><td><span class="tag t-new">NEW</span></td><td><b>Promoted in Rev 3</b> into the twin's slot. P24 deselected it at intake. Doubles as continuous export of every item definition</td></tr>
+</tbody></table>
+<h2 class="sec">Nice-to-have — dropped in this order if time runs short</h2>
+<table>
+<thead><tr><th>Component</th><th>Risk</th><th>Drop rationale</th></tr></thead>
+<tbody>
+<tr><td>Map item</td><td>—</td><td>First to go. Real but not load-bearing, and deliberately part of <em>no</em> export checkpoint's minimum content — Rev 2 had it inside E2, which made a droppable item mandatory by accident</td></tr>
+<tr><td>Power BI pages 4 → 2</td><td>—</td><td>Merchant &amp; Terminal Risk, then Estate Health. The drop must be <b>recorded</b>, not silent</td></tr>
+<tr><td>Fabric job-events Eventstream</td><td>—</td><td>The platform-watching-itself ops page. A bonus, not the story</td></tr>
+<tr><td>Fabric Data Agent over Eventhouse</td><td><span class="tag t-risk">GATED</span></td><td>Capacity-gated, not tenant-gated — this is what P23 lost it to. Gate <b>C4</b>; recorded, never planned around</td></tr>
+<tr><td>Deployment pipeline</td><td>—</td><td>Needs a second workspace. Git integration alone carries the ALM story</td></tr>
+<tr class="dead"><td><b>Digital Twin Builder</b></td><td><span class="tag t-stop">KILLED</span></td><td><b>Not on the drop list — removed entirely.</b> An unavailable item is not a stretch goal. Gate C1 failed 2026-08-17; <code>dim_estate</code> + a decomposition tree substituted the same session</td></tr>
+</tbody></table>
+<h2 class="sec">Never dropped, at any cost</h2>
+<p class="lead">The three export checkpoints, and the <b>dispute-grading cold path</b>. The cold path is both the pitch and, on any naive reading of the drop list, the cheapest thing to cut — so the contract says explicitly which of those two facts wins. Report pages and the Map go first.</p>
+</section>
+
+<!-- GATES -->
+<section id="gates" hidden>
+<h2 class="sec">Six Phase-0 gates — one failed, one passed, two resolved this session, two findings</h2>
+<p class="lead">Skill 8 Step 1 exists because P23 checked six tenant toggles and still lost the Data Agent, which turned out to be capacity-gated rather than tenant-gated. P25 adds a second axis P24 recorded but never carried forward as meaningful: <b>region</b>. Region is what killed the twin.</p>
+<table>
+<thead><tr><th class="num">#</th><th>Gate</th><th>State</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td class="num">C0</td><td>Same FTL64 trial capacity still live; remaining days <b>re-read from the banner</b></td><td><span class="tag t-new">RESOLVED</span></td><td><b>Not the same trial.</b> A second, previously-unrecorded FTL64 trial exists on this tenant under the user's own account, and this project uses <em>that</em> one — 23 days left, read 2026-08-17, expiry unchanged at ~2026-09-09 by coincidence, not inheritance</td></tr>
+<tr class="dead"><td class="num">C1</td><td>Digital Twin Builder offered in-region, and an ontology survives a close-and-reopen</td><td><span class="tag t-stop">FAIL</span></td><td><b>Executed 2026-08-17.</b> Twin removed · <code>dim_estate</code> + decomposition tree · Git integration promoted · KQL tables 11 → 12 · contract to Rev 3</td></tr>
+<tr><td class="num">C2</td><td>Direct Lake binds to an Eventhouse via OneLake availability</td><td><span class="tag t-risk">FINDING</span></td><td><b>Could not run yet.</b> OneLake availability needs ≥1 KQL table first; <code>EH_MeridianPay</code>'s database has zero. Re-run in Session 3 once the KQL layer exists</td></tr>
+<tr><td class="num">C3</td><td>Eventhouse <b>idle</b> CU burn, generator stopped</td><td><span class="tag t-risk">FINDING</span></td><td><b>Measured, caveated.</b> Zero recorded CU for <code>EH_MeridianPay</code> in the Capacity Metrics item table — consistent with negligible idle burn, but not distinguishable from the refresh predating the item. Bigger finding: <b>the capacity is shared</b> with another workspace's live workload (~2.35% avg utilization already, before this project loads anything). Re-check Session 3</td></tr>
+<tr><td class="num">C4</td><td>Activator triggers from a KQL query / Eventstream; Data Agent availability in the same pass</td><td><span class="tag t-new">RESOLVED</span> <span class="tag t-risk">MIXED</span></td><td>Eventstream/KQL-query trigger path <b>confirmed reachable</b> (source picker offers it; the KQL Queryset's "Add alert" button exists, disabled pending data). Data Agent <b>confirmed unavailable</b> — SKU-gated, matching P23 exactly, plus no Copilot licence</td></tr>
+<tr class="hi"><td class="num">C5</td><td>Cost instrumentation live-fires — <code>capture_session_cost.py</code></td><td><span class="tag t-new">PASS</span></td><td>Discharged 2026-08-17, and fired again in Session 2 without incident: snapshots committed to <code>_cost/session-01.json</code> and <code>session-02.json</code>. A broken mechanism is a Phase-0 finding, not a Phase-10 discovery</td></tr>
+</tbody></table>
+<p class="lead"><b>Every gate now has a dated entry — none remain untouched.</b> C2 and C3 both resolved to a finding rather than a clean pass, which is the correct outcome per this engine's own rule: a gate that could not be run cleanly is a finding, never a pass. Both get one more read early in Session 3, once the KQL layer exists and has had time to accrue real metrics. Full evidence for every gate, including the browser-automation method used for C3 (explicit per-task user approval): <code>00_Plan/Gate_Check_Results.md</code>.</p>
+<h2 class="sec">Three Type D projects, three preview components lost</h2>
+<table>
+<thead><tr><th>Project</th><th>Component</th><th>Discovered</th><th>Cost</th></tr></thead>
+<tbody>
+<tr><td>23</td><td>Fabric Graph</td><td><b>Mid-build</b> — edges saved, then vanished on reopen, after Phase 8 had built the edge tables</td><td>Phase 8's traversal UI wasted; the finding shipped as a published limitation</td></tr>
+<tr><td>24</td><td>Fabric Graph</td><td>De-scoped at intake, on P23's evidence</td><td>Zero. The edge tables were built anyway and stayed queryable</td></tr>
+<tr class="hi"><td>25</td><td><b>Digital Twin Builder</b></td><td><b>Phase 0</b>, to regional unavailability, before anything existed</td><td><b>Zero build hours.</b> Contract to Rev 3 the same session</td></tr>
+</tbody></table>
+<p class="lead">P25's twin was not merely gated — the contract already named its replacement, so when the failure was reported there was nothing left to decide. <b>A kill criterion that says "replan" is not a criterion.</b> Name the substitute artefact, the component that takes the vacated slot, and every committed number that moves.</p>
+<h2 class="sec">One consequence worth stating out loud</h2>
+<p class="lead">The domain was reframed from issuer-side fraud to an acquirer's terminal estate <em>specifically</em> so Digital Twin Builder would have a subject. That justification is now void. The reframe still stands on four independent merits — telemetry is a genuine second stream, the Map has a real subject, reflex 3 (terminal dark) is the non-fraud reflex that makes this a product rather than a demo, and the hierarchy still gives every alert its merchant and store context. Reverting to issuer-side remains available and costs all four. <b>A decision whose only stated reason has been removed is an open decision until it is re-argued</b> — so it is recorded as one rather than assumed away.</p>
+</section>
+
+<!-- THE NUMBERS -->
+<section id="num" hidden>
+<div class="caveat"><b>Read this first.</b> The scale below is now <b>measured, not a design target</b> — frozen 2026-08-17 from the generator's own reproducible output (<code>diff -rq</code> clean across two independent full-scale runs, <code>MASTER_SEED=250817</code>). Everything past the generator — the KQL layer, reflexes, dashboards and report — does not exist in Fabric yet and remains a design target until Session 3 onward builds it; those figures are marked accordingly below. <span style="color:var(--ink3)">Basis: contract §5 "Measured / frozen", <code>01_Source/GENERATOR_SPEC.md</code> §9, both 2026-08-17.</span></div>
+<h2 class="sec">Measured scale — frozen Session 2, from the generator's own output</h2>
+<div class="kpis"><div class="kpi accent"><div class="v">600 · 927 · 1,500</div><div class="l">merchants · stores · terminals</div></div><div class="kpi accent"><div class="v">9,730,652</div><div class="l">events in the full backfill (auth + telemetry + disputes)</div></div><div class="kpi"><div class="v">5,386,869</div><div class="l">auth_events, 90-day backfill</div></div><div class="kpi"><div class="v">4,337,068</div><div class="l">terminal_telemetry, 30-day backfill</div></div><div class="kpi"><div class="v">6,715</div><div class="l">disputes raised as of SIM_NOW (of an eventual ≈13.5k — maturity-cohort effect, not a miss)</div></div></div>
+<p class="lead">927 stores sits at this spec's own declared +3% tolerance edge against the proposed ~900, not a miss. Full per-stream counts and the reproducibility proof: <code>01_Source/GENERATOR_SPEC.md</code> §9.</p>
+<h2 class="sec">The maturity cohort — why a 23-day trial can still publish precision</h2>
+<p class="lead">Grading appears to need 30–60 day-old disputes against 23 days of capacity. <b>That conflict is false.</b> The generator's clock is synthetic, so a 90-day backfill already contains matured disputes for its own earlier authorisations. No lag-compression is needed, which means it is not a declared synthetic extension — and the cohort structure is how a real fraud-ops team reports precision anyway.</p>
+<table>
+<thead><tr><th>Cohort</th><th>Dispute maturity</th><th>What the Alert Precision page shows</th></tr></thead>
+<tbody>
+<tr class="hi"><td><b>T−90 → T−60</b></td><td>Fully matured</td><td>Precision and recall, measurable on day one</td></tr>
+<tr><td>T−60 → T−30</td><td>Partially matured</td><td>Precision with the maturity percentage stated alongside it</td></tr>
+<tr><td>T−30 → T, and live</td><td>Not yet matured</td><td><b>Awaiting grading</b> — never zero. Reporting precision across an ungraded cohort is the defect this design exists to avoid</td></tr>
+</tbody></table>
+<h2 class="sec">Six stream data-quality rules — the new problem class</h2>
+<p class="lead">P24 proved batch data quality: a late file, a restatement, one column of schema drift. Streaming's equivalents are harder, and two of them have no batch analogue at all. Every fault is injected deliberately by the generator, so each rule has something true to find.</p>
+<table>
+<thead><tr><th class="num">#</th><th>Rule</th><th>Fault modelled</th><th>P24's batch analogue</th></tr></thead>
+<tbody>
+<tr><td class="num">1</td><td>Idempotent dedupe on <code>auth_id</code></td><td>At-least-once delivery replays the same event</td><td>Duplicate natural keys</td></tr>
+<tr class="hi"><td class="num">2</td><td><b>Out-of-order resolution</b></td><td>A reversal or partial capture arrives <em>before</em> its original authorisation</td><td>The <code>_R2</code> restatement — but harder</td></tr>
+<tr><td class="num">3</td><td>Late arrival past the watermark</td><td>A terminal buffers offline, then dumps 40 minutes at once</td><td>The late file</td></tr>
+<tr class="hi"><td class="num">4</td><td><b>Device clock skew</b></td><td><code>event_time</code> vs <code>ingest_time</code> per terminal; the dashboard must declare which it trusts</td><td><span style="color:var(--ink3)">none</span></td></tr>
+<tr><td class="num">5</td><td>Payload schema evolution</td><td>A 3DS/SCA field appears mid-stream; schema-on-read absorbs it with no redeploy</td><td>The schema drift</td></tr>
+<tr><td class="num">6</td><td>Hot-vs-cold reconciliation</td><td>Eventhouse vs Lakehouse replay — row counts <b>and</b> summed amounts</td><td>Row-count reconciliation</td></tr>
+</tbody></table>
+<p class="lead">Two rules carried from P24 govern all six. <b>"The cell didn't error" is not proof</b> — every silent-tagging rule (1, 2, 3) needs an independent downstream structural check, because P24's <code>resolve_restatements()</code> ran clean and was wrong. And <b>every check needs a floor that "nothing" cannot satisfy</b> — a rule finding no rows must prove it read some.</p>
+<h2 class="sec">Four reflexes — and one of them is deliberately not fraud</h2>
+<table>
+<thead><tr><th class="num">#</th><th>Reflex</th><th>Signal</th></tr></thead>
+<tbody>
+<tr><td class="num">1</td><td>Card-testing burst</td><td>≥ N low-value auths on distinct tokens at one terminal within M minutes, decline rate above threshold</td></tr>
+<tr><td class="num">2</td><td>Terminal compromise</td><td>Tamper flag <b>and</b> out-of-trading-hours activity <b>and</b> a decline-rate step change — three weak signals, not one strong one</td></tr>
+<tr class="hi"><td class="num">3</td><td><b>Terminal dark</b></td><td>No heartbeat for X minutes during that store's trading hours. Revenue loss, not fraud — a platform that only ever cries fraud is a demo</td></tr>
+<tr><td class="num">4</td><td>Issuer degradation</td><td>Approval rate for one issuer BIN drops more than Nσ against <em>its own</em> baseline, via <code>series_decompose_anomalies</code></td></tr>
+</tbody></table>
+<h2 class="sec">Committed scope — not yet built, so drift is measurable against these targets from Session 3</h2>
+<div class="kpis"><div class="kpi"><div class="v">12</div><div class="l">Eventhouse KQL tables (4 raw · 5 curated · dq · alerts · ground truth)</div></div><div class="kpi"><div class="v">3</div><div class="l">materialized views</div></div><div class="kpi"><div class="v">12</div><div class="l">KQL functions</div></div><div class="kpi"><div class="v">3</div><div class="l">Real-Time Dashboard pages</div></div><div class="kpi"><div class="v">4</div><div class="l">Activator reflexes</div></div></div>
+<div class="kpis"><div class="kpi"><div class="v">4</div><div class="l">Power BI pages — 2 mandatory</div></div><div class="kpi"><div class="v">20</div><div class="l">DAX measures (P24: 45)</div></div><div class="kpi stop"><div class="v">≤ 2</div><div class="l">Spark notebooks — the anti-drift number</div></div><div class="kpi"><div class="v">6</div><div class="l">stream DQ rules</div></div><div class="kpi accent"><div class="v">8</div><div class="l">components new to the engine</div></div></div>
+</section>
+
+<!-- PHASES -->
+<section id="ph" hidden>
+<h2 class="sec">Eight phases, eight sessions — six of them capacity-bound</h2>
+<p class="lead">P24 planned eleven sessions and ran sixteen: a 45% overrun, on a better plan than this one and a longer runway. The response is not a tighter plan but an explicit split. <b>Only sessions 1–6 need the capacity</b>, so export checkpoint <b>E3 lands at the end of Session 6</b> and closure and publishing run after the trial can safely lapse. P23 lost its entire estate to a plan that put the export last.</p>
+<div class="phases">
+<div class="ph done">
+  <div class="hd"><h4>Phase 0 · Architecture + gates</h4><span class="sess">Session 1 · Opus <span class="cap">CAPACITY</span></span></div>
+  <p class="status"><span class="chk">✓</span><b>Complete 2026-08-17.</b> Contract at Rev 3 after an adversarial audit found nine defects and gate C1 failed. C5 passed; C0, C2, C3, C4 carry into Session 2 by design.</p>
+  <div class="gate"><b>Gate:</b> contract approved · gate results written · cost snapshot committed to the device · architecture page built from the house component. <b>Met.</b></div>
+</div>
+
+<div class="ph done">
+  <div class="hd"><h4>Phase 1 · Git, gates, generator, Eventhouse landing</h4><span class="sess">Session 2 · Sonnet <span class="cap">CAPACITY</span></span></div>
+  <p class="status"><span class="chk">✓</span><b>Functionally complete 2026-08-17</b> — Git connected first, as planned; Eventhouse and Activator created; all four gates now have a dated entry (two resolved, two findings); generator built and proven reproducible; §5 frozen from its output. <b>One item carries into Session 3</b>: the backfill has not yet been loaded into the live Eventhouse — deferred deliberately, so C2/C3 were read against an empty database first, per the contract's own gate ordering.</p>
+  <p>Connect Git <em>first</em>, so nothing is built outside version control. Then create the Eventhouse and Activator, run C0/C2/C3/C4 against them, freeze the scale, and build the generator both ways.</p>
+  <div class="gate"><b>Gate:</b> four gates recorded ✓ · workspace git-connected ✓ · generator reproducible with <code>diff -rq</code> across two runs ✓ · backfill loaded and reconciled to <code>Landing_Manifest.csv</code> — <b>carried to Session 3</b>, after the KQL layer exists to receive it</div>
+</div>
+
+<div class="ph done">
+  <div class="hd"><h4>Phase 2 · KQL transformation + stream DQ</h4><span class="sess">Session 3 · <b>Opus</b> <span class="cap">CAPACITY</span></span></div>
+  <p class="status"><span class="chk">✓</span><b>Complete 2026-08-18.</b> Update policies, 3 materialized views, 12 functions and <code>dim_estate</code> (1,500 terminals, zero orphans) all built; the 9.7m-event backfill loaded and reconciled 16/16; all six DQ rules green by query. An update policy was found unable to dedupe globally and the defect was fixed, not worked around. <b>→ E1</b></p>
+  <p>Update policies, three materialized views, twelve functions, <code>dim_estate</code>, and the six DQ rules. Opus because update-policy vs materialized view vs function is an architecture decision, not mechanics.</p>
+  <div class="gate"><b>Gate:</b> curated tables reconcile to raw · 6 DQ rules green <em>by query</em>, each with a floor "nothing" cannot satisfy · rules 1–3 each have an independent structural check. <b>→ Export E1</b></div>
+</div>
+
+<div class="ph done">
+  <div class="hd"><h4>Phase 3 · Reflexes, Map, and the mockups</h4><span class="sess">Session 4 · Sonnet <span class="cap">CAPACITY</span></span></div>
+  <p class="status"><span class="chk">✓</span><b>Complete 2026-08-18.</b> All four reflexes have evidenced firings in <code>alerts</code> (186 rows) — two of them only after diagnosing why they returned zero against a naive <code>as_of</code>, rather than accepting "2 of 4" as satisfying the criterion. All four Activator rules Running, with a live firing confirmed end-to-end in Teams. Skill 0 mockups delivered for all 7 surfaces. <b>→ E2</b></p>
+  <p>Four Activator reflexes on the live stream, the Map if it survives, and Skill 0 run across <b>all seven</b> consumption surfaces in one package — no mockup exists for any of them.</p>
+  <div class="gate"><b>Gate:</b> ≥1 reflex <em>demonstrably fired</em>, with the evidence saved · reflex precision measured against <code>ground_truth</code> · one approved <code>P25_Package.html</code>. <b>→ Export E2</b></div>
+</div>
+
+<div class="ph done">
+  <div class="hd"><h4>Phase 4 · Real-Time Dashboard + Direct Lake model</h4><span class="sess">Session 5 · Sonnet <span class="cap">CAPACITY</span></span></div>
+  <p class="status"><span class="chk">✓</span><b>Substantially complete 2026-08-19.</b> Three RTD pages built as generated JSON and imported — 14 tiles, 11 queries, 0 unresolved identifiers against the live DDL, at <b>zero browser automation</b>. Direct Lake model completed to seven shortcut tables. Alert grading run and control-tested; precision measured. 24 measures written in three formats. <b>Carried into Session 6:</b> the <code>alerts</code> OneLake mirror reads 0 rows, so the measures are written but not loaded.</p>
+  <p>Three RTD pages for the operator, then the semantic model bound over Eventhouse OneLake availability — or C2's Import fallback, with the pitch corrected in the same session.</p>
+  <div class="gate"><b>Gate:</b> 3 RTD pages live and auto-refreshing · model bound and refreshing · if C2 failed, the "no Gold notebook" claim struck from the contract, README and this page</div>
+</div>
+
+<div class="ph done">
+  <div class="hd"><h4>Phase 5 · Power BI report</h4><span class="sess">Session 6 · Sonnet <span class="cap">CAPACITY</span></span></div>
+  <p class="status"><span class="chk">✓</span><b>Report complete 2026-08-19; E3 not closed.</b> 5 pages and 53 visuals generated from a spec, <b>0 errors</b> on both the engine linter and the official Microsoft PBIR validator — which had never been run in this project before and turned out to be one <code>npm install</code> away. First <code>decompositionTreeVisual</code> in this engine. Reflex 3's time-travel grading written, with a positive control, a shifted-window control and its excluded right-censored tail reported as a number. <b>Still blocked:</b> 24 measures written, 0 loaded — the mirror toggle is one manual step. <b>E3 slipped</b>, so Session 7 is capacity-bound against a plan that said it would not be; 21 days of trial remain, so the buffer is spent rather than the risk realised.</p>
+  <p>Twenty measures, four pages at mockup fidelity on the first pass, the decomposition tree over <code>dim_estate</code>, and the Alert Precision page showing cohort maturity.</p>
+  <div class="gate"><b>Gate:</b> <code>validate_pbip.py</code> 0/0 · official PBIR CLI <code>validate</code> run · every measure definition read back against its rendered value. <b>→ Export E3 — the last capacity-bound act</b></div>
+</div>
+
+<div class="ph now">
+  <div class="hd"><h4>Phase 6 · Closure — Skill 10</h4><span class="sess">Session 7 · Sonnet <span class="cap free">NO CAPACITY</span></span></div>
+  <p class="status"><span class="chk">▸</span><b>Ran capacity-bound, against a contract that said it would not.</b> E3 did not close in Session 6, so the mirror toggle, the measure load, the reflex-3 grading and the KQL cleanup all landed here. What closed: the mirror, 24/24 measures, both precision guards, reflex 3's grading, E3's two-sided read-back, and the Eventstream decision. What broke and was fixed: dropping <code>alerts</code> took out three RTD tiles — the static checker had reported <b>19/19 resolved that same morning</b>, because its catalogue is parsed from the DDL we wrote and cannot see a portal drop. A <b>retired-object rule</b> now closes that gap, and its positive control finds <b>five</b> broken files, not the three the portal surfaced. Four linter rules shipped with both controls; <b>all 37 engine themes swept</b> after a theme was found to be blanking KPI cards that every validator called green.</p>
+  <p>Post-mortem, plan-vs-actual, comparison against P24, the self-contained HTML package, one inherited assumption tested, folder disposition, and the cost analysis.</p>
+  <div class="gate"><b>Gate:</b> C1–C8 all in <code>09_Closure/</code> · <code>--merge</code> run over <code>_cost/</code> · ledger row recorded · the basis of every number stated</div>
+</div>
+
+<div class="ph">
+  <div class="hd"><h4>Phase 7 · Publishing — Skill 9</h4><span class="sess">Session 8 · Sonnet <span class="cap free">NO CAPACITY</span></span></div>
+  <p>Portfolio card → repo → Pages guide → deck, in that order, each reusing the previous one's framing.</p>
+  <div class="gate"><b>Gate:</b> <code>check_rebuild_materials.py</code> passes · <code>scrub_check.py --allow</code> whole-file, not line-scoped · guide imports <code>guide_theme.py</code> · <b>P25 gets its own architecture diagram</b>, not P24's · robocopy to <code>C:\p25pub</code> before any <code>git add</code></div>
+</div>
+</div>
+<h2 class="sec">Every session closes the same way</h2>
+<p class="lead"><b>1.</b> The spec reconciliation gate — before writing or building against any section describing a built artefact, re-read the artefact, not the contract. <b>2.</b> Cost snapshot to <code>_cost/session-NN.json</code>, committed to the device, because cloud transcripts do not survive the container. <b>3.</b> <code>HANDOVER.md</code> overwritten. <b>4.</b> The next kickoff prompt in <em>its own file</em> — an embedded copy went stale on arrival 2 of 2 times. <b>5.</b> No measured number quoted without its measurement timestamp.</p>
+</section>
+
+<!-- VS P23 &AMP; P24 -->
+<section id="vs" hidden>
+<h2 class="sec">Deliberately different from both predecessors</h2>
+<table>
+<thead><tr><th>P23 · Order-to-Cash</th><th>P24 · FP&amp;A Close</th><th>P25 · Real-Time Payments Risk</th><th>Why</th></tr></thead>
+<tbody>
+<tr class="hi"><td>Spark notebooks for Silver and Gold</td><td>Spark notebooks for Silver and Gold</td><td><b>KQL update policies + materialized views</b>, notebooks capped at 2</td><td>The structural claim. Both predecessors moved batch through Spark; this moves streams through the engine that owns them</td></tr>
+<tr><td>Batch, daily at best</td><td>Monthly close</td><td><b>Seconds, plus a 30–60 day cold path</b></td><td>Two latencies and two audiences on one event stream. The contrast is the story</td></tr>
+<tr class="hi"><td>Read-only estate</td><td>Writeback via User Data Functions</td><td><b>The platform grades its own alerts</b></td><td>P24's loop wrote a number back. P25's loop writes back a <em>verdict on itself</em></td></tr>
+<tr><td>Power BI, 5 of 7 pages</td><td>Power BI, 8 of 8 pages</td><td><b>Real-Time Dashboard as a co-hero</b>, Power BI demoted to 4</td><td>An RTI build whose only consumption surface is Power BI has not really used RTI</td></tr>
+<tr><td>Ontology, renamed after the fact</td><td>Ontology + Graph on the ownership tree</td><td><b><code>dim_estate</code> + decomposition tree</b> — after the twin was killed in Phase 0</td><td>Third preview loss in three projects. This one cost nothing because the gate ran first</td></tr>
+<tr><td>Batch DQ: none</td><td>Batch DQ: 8 rules, late file / restatement / drift</td><td><b>Stream DQ: 6 rules</b>, two with no batch analogue</td><td>Out-of-order reversals and per-terminal clock skew are problems batch simply does not have</td></tr>
+<tr><td>Supplied SQL source, mirrored</td><td>13 supplied Excel files, regenerated messy</td><td><b>No source at all</b> — generated from a fixed seed</td><td>Removes the frozen-control-totals obligation; replaces it with byte-reproducibility, which is stricter</td></tr>
+<tr><td>Git: not used</td><td>Git: deselected at intake</td><td><b>Git integration, non-negotiable</b></td><td>Promoted into the twin's slot, and it doubles as continuous export of every item definition</td></tr>
+<tr class="hi"><td>One 6-day session</td><td>11 planned, 16 run</td><td><b>8 planned — 6 capacity-bound, 2 not</b></td><td>The overrun risk is not removed by planning harder; it is absorbed by making only six sessions deadline-sensitive</td></tr>
+</tbody></table>
+<h2 class="sec">Carried forward unchanged</h2>
+<p class="lead">One session per phase, with an overwritten <code>HANDOVER.md</code> and a kickoff prompt in its own file · cheapest route first: offline files → query an endpoint → written click-steps → browser automation only with explicit per-task approval · never read a number off a screenshot a query would return · offline notebook generation with list-of-lines <code>source</code>, pure ASCII, metadata from a known-good reference, <code>ast.parse</code> per cell · grep a working sibling before hand-writing any JSON or TMDL · the house theme <code>MyLifeInLegoBricks_Theme.json</code>, never a new one invented · the house architecture page from <code>arch_page.py</code>, never hand-written · export before the capacity lapses, and <em>read the export back</em> · closure (Skill 10) before publishing (Skill 9) · state the basis of every number, and say so when you cannot measure something.</p>
+<h2 class="sec">The baseline to beat</h2>
+<p class="lead" style="color:var(--ink3)">Basis: P23 from <code>project23-cost-analysis.md</code>'s headline, the measured transcript. P24 from <code>B9_Retrospective.md</code>, measured at close 2026-08-16. Recorded here because P24's own contract had to reconcile three conflicting figures for P23 and name which it graded against.</p>
+<table>
+<thead><tr><th>Metric</th><th class="num">P23 actual</th><th class="num">P24 actual</th><th class="num">P25 target</th></tr></thead>
+<tbody>
+<tr><td>Sessions</td><td class="num">1</td><td class="num">16 <span style="color:var(--ink3)">(11 planned)</span></td><td class="num"><b>8</b></td></tr>
+<tr><td>Components complete</td><td class="num">6.5 / 7</td><td class="num">10 / 10</td><td class="num"><b>11 / 11</b></td></tr>
+<tr class="hi"><td>Components new to the engine</td><td class="num">—</td><td class="num">3</td><td class="num"><b>8</b></td></tr>
+<tr><td>Report pages, planned vs delivered</td><td class="num">5 / 7</td><td class="num">8 / 8</td><td class="num">4 / 4</td></tr>
+<tr><td>Browser share of calls</td><td class="num">70%</td><td class="num">≤ 15%</td><td class="num"><b>≤ 10%</b></td></tr>
+<tr><td>Validator errors, first pass</td><td class="num">not measured</td><td class="num">7 → 43 → 0</td><td class="num"><b>0</b></td></tr>
+<tr><td>Cost snapshots captured</td><td class="num">0</td><td class="num">2 of 16</td><td class="num"><b>8 of 8</b></td></tr>
+<tr class="hi"><td>Preview components lost</td><td class="num">1, <b>mid-build</b></td><td class="num">1, de-scoped at intake</td><td class="num">1, <b>in Phase 0, at zero cost</b></td></tr>
+</tbody></table>
+<p class="lead">The sessions row is the one to watch, and the last row is the one that has already paid.</p>
+</section>
+
+<footer>Project 25 · Power BI Automation Engine · Type D platform build · Skill 8. Built by <code>00_Plan/build_architecture_html.py</code> from <code>_ENGINE/templates/arch_page.py</code> — not hand-written. Source documents: <code>OUTCOME_CONTRACT.md</code> (Rev 3 + addendum) · <code>00_Plan/Gate_Check_Results.md</code> · <code>HANDOVER.md</code> · <code>01_Source/GENERATOR_SPEC.md</code> · <code>04_Model/MODEL_NOTES.md</code> · <code>README.md</code>.<br><b>What on this page is measured, and when.</b> The scale on the "numbers" tab was frozen 2026-08-17 from the generator's own reproducible output. Gate results are dated 2026-08-17 to 2026-08-18. The KQL layer, the 186 graded alerts, the precision figure and its control, and the three Real-Time Dashboard pages are all measured 2026-08-18 to 2026-08-19 and read back from the live estate. Capacity remaining (21 days) was read from the account profile pane on 2026-08-19, not inferred.<br><b>What is not yet built:</b> the four Power BI report pages, the decomposition tree, and export checkpoint E3 — all Session 6. The 24 DAX measures are written and offline-validated but <b>not loaded</b>, blocked on the <code>alerts</code> OneLake mirror reading zero rows. Reflex 3's precision is reported as <b>not measurable against a frozen backfill</b> rather than as 0.000, because an <code>arg_max</code> materialized view cannot time-travel — the reason is structural and is written down rather than rounded away.</footer>
+
+</div>
+<script>
+  const tabs=[...document.querySelectorAll('nav button')];
+  tabs.forEach(b=>b.addEventListener('click',()=>{
+    tabs.forEach(x=>x.setAttribute('aria-selected', x===b));
+    document.querySelectorAll('section').forEach(s=>s.hidden = s.id!==b.dataset.t);
+    window.scrollTo({top:0,behavior:'smooth'});
+  }));
+</script>
+</body>
+</html>

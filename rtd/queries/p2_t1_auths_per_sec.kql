@@ -1,0 +1,16 @@
+// P2 T1 -- Auths / sec  [stat]
+// Trailing 15 minutes of the reference window, not of the whole window, so the
+// number means the same thing whether the window is 90 days or 15 minutes.
+// event_type == 'auth' excludes reversals and partial captures, matching every
+// other approval/decline measure in the estate.
+// ROUNDING, corrected 2026-08-19. One decimal place renders ANY window holding fewer than
+// 45 auths in 15 minutes as '0.0' -- indistinguishable from a broken tile. The reference
+// window's quiet 15 minutes is exactly that case, and it was read as an empty tile before
+// the arithmetic was checked. Two decimals; the honest small number, not a zero.
+let as_of = _endTime;
+let win = 15m;
+auth_curated
+| where event_type == 'auth'
+| where trusted_time between (as_of - win .. as_of)
+| summarize c = count()
+| project Value = round(todouble(c) / 900.0, 2)

@@ -1,0 +1,42 @@
+// P2 T0 -- Fraud Watch KPI row  [multistat]
+// Same consolidation as page 1's KPI row, and for the same reason -- see that
+// file's header for the minimum-tile-size finding.
+//
+// The two rate KPIs read a single materialized 15-minute slice, so "auths/sec"
+// and "decline rate now" cannot be computed over different populations. The two
+// firing counts read the persisted `alerts_v2` table, per the implementation guide,
+// so this page and the exported E2 evidence cannot disagree.
+// ROUNDING, corrected 2026-08-19. One decimal place renders ANY window holding fewer than
+// 45 auths in 15 minutes as '0.0' -- indistinguishable from a broken tile. The reference
+// window's quiet 15 minutes is exactly that case, and it was read as an empty tile before
+// the arithmetic was checked. Two decimals; the honest small number, not a zero.
+let as_of = _endTime;
+let win = 15m;
+let recent = materialize(
+    auth_curated
+    | where event_type == 'auth'
+    | where trusted_time between (as_of - win .. as_of));
+union
+  (recent
+   | summarize c = count()
+   | extend ord = 1, Metric = 'Auths / sec', Value = round(todouble(c) / 900.0, 2)
+   | project ord, Metric, Value),
+  (recent
+   | summarize d = countif(auth_result == 'declined'), t = count()
+   | extend ord = 2, Metric = 'Decline rate now (%)',
+            Value = round(100.0 * todouble(d) / todouble(max_of(t, 1)), 1)
+   | project ord, Metric, Value),
+  (alerts_v2
+   | where reflex_type == 'card_testing_burst'
+   | where window_start between (_startTime .. _endTime)
+   | summarize Value = todouble(count())
+   | extend ord = 3, Metric = 'Reflex 1 firings'
+   | project ord, Metric, Value),
+  (alerts_v2
+   | where reflex_type == 'terminal_compromise'
+   | where window_start between (_startTime .. _endTime)
+   | summarize Value = todouble(count())
+   | extend ord = 4, Metric = 'Reflex 2 firings'
+   | project ord, Metric, Value)
+| order by ord asc
+| project Metric, Value

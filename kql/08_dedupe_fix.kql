@@ -1,0 +1,174 @@
+// ============================================================================
+// Project 25 (Meridian Pay) -- Session 3, Phase 2
+// 08_dedupe_fix.kql                       [REV 3 -- 2026-08-18]
+//
+// Fixes the two MISMATCH rows from 07_reconcile_after_load.kql:
+//     auth_curated       expected 5,365,392   loaded 5,383,455   delta +18,063
+//     telemetry_curated  expected 4,319,781   loaded 4,336,798   delta +17,017
+//
+// RUN ONE STATEMENT AT A TIME. Blank-line separated.
+//
+// ---------------------------------------------------------------------------
+// THE DEFECT: AN UPDATE POLICY CANNOT DEDUPLICATE GLOBALLY
+//
+// Kusto evaluates an update policy PER INGESTED BATCH (per extent), never
+// across the whole table. So
+//     raw_auth_events | summarize arg_max(ingest_time, *) by auth_id
+// removes only duplicates whose original lands in the SAME batch.
+//
+// The generator makes the split near-certain: dq_faults.duplicate_rows() does
+//     out = pd.concat([df, dupes], ignore_index=True)
+// -- appending all duplicates to the END of the frame, unshuffled. At 250,000-
+// row ingest batches, all 21,477 auth duplicates land in the final batch while
+// their originals sit across the preceding 5.36m rows. Only 3,414 of 21,477
+// (auth) and 270 of 17,287 (telemetry) were caught.
+//
+// This is what contract Sec5's "independent downstream structural check" was
+// written for: every command succeeded, the policy ran clean, the table
+// filled, and the dedupe silently did almost nothing. Only a check that knew
+// the expected DISTINCT-KEY count could tell "cleaned" from "copied".
+//
+// ---------------------------------------------------------------------------
+// REV HISTORY OF THIS FIX -- three platform limits hit in sequence, kept
+// visible because each one is a real constraint a reader will also hit:
+//
+//   Rev 1  .set-or-replace auth_curated <| auth_curated | summarize ...
+//          -> ClientAdminCommandFromQueryBadRequestException.
+//          Kusto refuses .set-or-replace when the source query reads the
+//          DESTINATION table. (.set-or-replace dim_estate <| fn_build_dim_estate()
+//          worked precisely because that function reads stg_dim_*, not
+//          dim_estate.) Wrapping the query in a function does NOT help -- Kusto
+//          resolves the function body.
+//          FIX: stage through a second table.
+//
+//   Rev 2  Staged version threw the throttling error
+//          "CommandType: 'TableSetOrReplace', Capacity: 1,
+//           Origin: 'CapacityPolicy/Ingestion'"
+//          while the three materialized views were building their first real
+//          snapshots. Transient; retry after they report Completed.
+//          (Recorded as gate C3 evidence -- this capacity is shared with the
+//          Order Management workspace, and a routine .set-or-replace on a
+//          5.4m-row table is enough to contend for it.)
+//
+//   Rev 3  Retry then threw LowMemoryCondition:
+//          KustoServicePartialQueryFailureLowMemoryConditionException.
+//          arg_max(ingest_time, *) must hold all 19 columns for every group
+//          across 5.38m rows -- more than this capacity will allocate.
+//          FIX: take_any(*) instead. See below.
+// ---------------------------------------------------------------------------
+//
+// WHY take_any(*) IS CORRECT HERE, NOT JUST CHEAPER.
+// The injected duplicates are EXACT copies -- dq_faults.duplicate_rows() does
+// `dupes = df.iloc[dup_idx].copy()`, identical natural key AND every other
+// field, per GENERATOR_SPEC.md Sec6 rule 1. When every row in a group is
+// byte-identical, "keep the one with the latest ingest_time" and "keep any
+// one" return the same row. arg_max was doing expensive comparison work to
+// choose between indistinguishable candidates. take_any is Kusto's documented
+// dedupe idiom and is bounded in memory because it stops at the first row per
+// group.
+//
+// STREAMING NUANCE, worth stating rather than leaving implicit: if live replay
+// (Session 4) ever re-delivers an event with a DIFFERENT ingest_time -- a true
+// at-least-once redelivery rather than an exact copy -- then take_any and
+// arg_max diverge, and arg_max(ingest_time, *) is the semantically correct
+// choice. For this backfill they are equivalent. Revisit when the dedup
+// materialized view is built (see the open item at the end of this file).
+// ============================================================================
+
+// ---- STEP 1: cheap, memory-bounded dedupe function ------------------------
+
+.create-or-alter function fn_dedupe_auth() { auth_curated | summarize take_any(*) by auth_id }
+
+// ---- STEP 2: build the staging table --------------------------------------
+// If this throws the CapacityPolicy/Ingestion throttle again, wait 2-3 minutes
+// and re-run the identical statement -- it is transient, not a defect.
+
+.set-or-replace auth_curated_dedup <| fn_dedupe_auth()
+
+// ---- STEP 3: verify BEFORE destroying anything ----------------------------
+// Must be exactly 5,365,392. Stop here if it is not.
+
+auth_curated_dedup | count
+
+// ---- STEP 4: swap in ------------------------------------------------------
+
+.set-or-replace auth_curated <| auth_curated_dedup
+
+// ---- STEP 5: reclaim ------------------------------------------------------
+
+.drop table auth_curated_dedup
+
+// ---- STEP 6-10: same sequence for telemetry -------------------------------
+
+.create-or-alter function fn_dedupe_telemetry() { telemetry_curated | summarize take_any(*) by telemetry_id }
+
+.set-or-replace telemetry_curated_dedup <| fn_dedupe_telemetry()
+
+telemetry_curated_dedup | count
+
+.set-or-replace telemetry_curated <| telemetry_curated_dedup
+
+.drop table telemetry_curated_dedup
+
+// ---- STEP 11: the independent structural check. Both must return 0. -------
+// Not a count comparison -- a structural assertion that no natural key repeats.
+// This is what 05_dq_rules_run.kql persists as rule 1's
+// independent_check_passed, and it would have caught the original defect with
+// no expected-count table at all.
+
+auth_curated | summarize c = count() by auth_id | where c > 1 | count
+
+telemetry_curated | summarize c = count() by telemetry_id | where c > 1 | count
+
+// ---- STEP 12: confirm the update policies survived the extent swap --------
+
+.show table auth_curated policy update
+
+.show table telemetry_curated policy update
+
+// ---- STEP 13: re-run 07_reconcile_after_load.kql -- expect 16/16 OK -------
+
+// ============================================================================
+// IF take_any(*) STILL HITS LowMemoryCondition
+//
+// Dedupe partitions cleanly by its own key -- every row sharing an auth_id
+// hashes to the same bucket -- so the work can be split into 4 memory-bounded
+// passes without changing the result. Replace STEP 2 with:
+//
+//   .set-or-replace auth_curated_dedup <| auth_curated | where hash(auth_id, 4) == 0 | summarize take_any(*) by auth_id
+//   .append          auth_curated_dedup <| auth_curated | where hash(auth_id, 4) == 1 | summarize take_any(*) by auth_id
+//   .append          auth_curated_dedup <| auth_curated | where hash(auth_id, 4) == 2 | summarize take_any(*) by auth_id
+//   .append          auth_curated_dedup <| auth_curated | where hash(auth_id, 4) == 3 | summarize take_any(*) by auth_id
+//
+// The first is .set-or-replace (creates/clears), the rest .append. The count
+// check in STEP 3 is unchanged and still exact -- which is the point of
+// checking a number rather than checking that nothing errored.
+//
+// ============================================================================
+// STILL OPEN -- THIS FILE FIXES THE BACKFILL, NOT THE STREAM
+//
+// Once live replay starts (Session 4), duplicates arriving in later batches
+// will again survive the update policy. The platform's answer is a
+// MATERIALIZED VIEW, which aggregates across all extents:
+//     .create-or-alter materialized-view mv_auth_dedup on table auth_curated
+//     { auth_curated | summarize arg_max(ingest_time, *) by auth_id }
+//
+// NOT done this session, deliberately -- it is a contract change, not a bug fix:
+//   * OUTCOME_CONTRACT.md Sec3 commits to exactly 3 materialized views; two
+//     dedup views make it 5. A committed number gets changed on purpose.
+//   * Kusto cannot build a materialized view over another materialized view,
+//     so the three aggregate MVs would keep reading un-deduped auth_curated --
+//     ~0.4% inflation. Immaterial to reflex 1's thresholds (which carry
+//     deliberate margin), but it is an inconsistency, and accepting it should
+//     be an explicit decision rather than a later discovery.
+//   * The streaming case is also where take_any vs arg_max stops being
+//     equivalent (see the note above).
+//
+// ENGINE LESSON for PBIP_GENERATION_GUIDE.md at session close:
+//   "An update policy is a per-batch transform. Any operation whose
+//    correctness depends on seeing the whole table -- dedupe, global ranking,
+//    cross-batch sequencing -- cannot live in one, and fails SILENTLY rather
+//    than erroring. Use a materialized view. And prefer take_any(*) over
+//    arg_max(key, *) for dedupe of exact duplicates: same answer, bounded
+//    memory."
+// ============================================================================

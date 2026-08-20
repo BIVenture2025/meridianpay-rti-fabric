@@ -1,0 +1,17 @@
+// P1 T7 -- Reflex 3 terminal-dark feed  [table]
+// NOTE, recorded rather than quietly substituted: the mockup shows merchant
+// display names ("Nasi Kandar Meridian"). The generator persists no merchant
+// name -- stg_dim_merchant is (merchant_id, merchant_tier, mcc, mcc_description).
+// mcc_description is the closest real attribute and is used instead.
+let as_of = _endTime;
+fn_reflex3_terminal_dark(20, as_of)
+| join kind=leftouter (dim_estate | project terminal_id, merchant_tier, mcc_description) on terminal_id
+| project Terminal = terminal_id,
+          Store = store_id,
+          Merchant = merchant_id,
+          Tier = merchant_tier,
+          Trade = mcc_description,
+          ['Last seen'] = last_seen,
+          ['Dark for (min)'] = minutes_dark
+| order by ['Dark for (min)'] desc
+| take 200

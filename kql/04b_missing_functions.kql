@@ -1,0 +1,142 @@
+// ============================================================================
+// Project 25 (Meridian Pay) -- Session 3, Phase 2
+// 04b_missing_functions.kql               [2026-08-18]
+//
+// The 6 functions absent from `.show functions` after 04_functions.kql was run
+// (13 of 19 present). Confirmed missing by their alphabetical gaps, not
+// guessed: fn_dq_rule3/4/5/6 should sit between fn_dq_rule2_out_of_order and
+// fn_issuers_for_estate_selection, and fn_reflex2/3 between fn_reflex1 and
+// fn_reflex4. All six absent.
+//
+// WHY THEY WERE MISSED -- a packaging fault in 04_functions.kql, not bad KQL.
+// That file separates statements with `//` comment lines and NO BLANK LINES,
+// so the Queryset cannot detect statement boundaries and every statement has
+// to be hand-selected. Six got missed. The tell is fn_dq_rule5_schema_evolution
+// -- a plain summarize with nothing unusual in it, which has no plausible
+// syntax reason to fail while more complex neighbours succeeded.
+//
+// THIS FILE IS BLANK-LINE SEPARATED. Click anywhere inside a statement and
+// press Run; the Queryset picks up exactly that block. Six statements, six
+// Runs. Nothing here is new logic -- these are byte-identical in behaviour to
+// 04_functions.kql, only re-spaced.
+//
+// PREREQUISITE: fn_store_open_sessions must already exist (it does -- it is in
+// your 13). fn_reflex2 and fn_reflex3 call it.
+// ============================================================================
+
+.create-or-alter function fn_reflex2_terminal_compromise(lookback_hours: int = 24, baseline_hours: int = 168, as_of: datetime = datetime(null), min_step: real = 0.15) {
+    let ref_time = iff(isnull(as_of), now(), as_of);
+    let win_start = ref_time - (lookback_hours * 1h);
+    let base_start = ref_time - (baseline_hours * 1h);
+    let tamper = telemetry_curated
+        | where tamper_flag == true
+        | where trusted_time between (win_start .. ref_time)
+        | extend gen_dow = (toint(dayofweek(trusted_time) / 1d) + 6) % 7
+        | extend tod = trusted_time - startofday(trusted_time);
+    let out_of_hours = tamper
+        | join kind=leftouter (fn_store_open_sessions())
+            on $left.store_id == $right.store_id, $left.gen_dow == $right.day_of_week
+        | summarize open_hits = countif(isnotnull(open_ts) and tod between (open_ts .. close_ts))
+            by telemetry_id, terminal_id, store_id, merchant_id, tamper_at = trusted_time
+        | where open_hits == 0;
+    let decline_now = auth_curated
+        | where event_type == 'auth'
+        | where trusted_time between (win_start .. ref_time)
+        | summarize now_declines = countif(auth_result == 'declined'), now_total = count() by terminal_id;
+    let decline_base = auth_curated
+        | where event_type == 'auth'
+        | where trusted_time between (base_start .. win_start)
+        | summarize base_declines = countif(auth_result == 'declined'), base_total = count() by terminal_id;
+    out_of_hours
+    | join kind=inner (decline_now) on terminal_id
+    | join kind=leftouter (decline_base) on terminal_id
+    | extend now_rate = todouble(now_declines) / todouble(max_of(now_total, 1))
+    | extend base_rate = todouble(coalesce(base_declines, 0)) / todouble(max_of(coalesce(base_total, 1), 1))
+    | where now_rate > base_rate + min_step
+    | project terminal_id, store_id, merchant_id, tamper_at, now_rate, base_rate,
+              step_change = now_rate - base_rate
+}
+
+.create-or-alter function fn_reflex3_terminal_dark(dark_minutes: int = 20, as_of: datetime = datetime(null)) {
+    let ref_time = iff(isnull(as_of), now(), as_of);
+    let gen_dow_now = (toint(dayofweek(ref_time) / 1d) + 6) % 7;
+    let tod_now = ref_time - startofday(ref_time);
+    let open_now = fn_store_open_sessions()
+        | where day_of_week == gen_dow_now
+        | where tod_now between (open_ts .. close_ts)
+        | distinct store_id;
+    mv_terminal_last_seen
+    | where store_id in (open_now)
+    | extend minutes_dark = datetime_diff('minute', ref_time, trusted_time)
+    | where minutes_dark >= dark_minutes
+    | project terminal_id, store_id, merchant_id, last_seen = trusted_time, minutes_dark
+}
+
+.create-or-alter function fn_dq_rule3_late_arrival() {
+    let late_auth = raw_auth_events
+        | extend lag_seconds = todouble(datetime_diff('second', ingest_time, event_time))
+        | where lag_seconds > 900.0
+        | project stream = 'auth_events', key_id = auth_id, terminal_id, event_time, ingest_time, lag_seconds;
+    let late_tel = raw_terminal_telemetry
+        | extend lag_seconds = todouble(datetime_diff('second', ingest_time, event_time))
+        | where lag_seconds > 900.0
+        | project stream = 'terminal_telemetry', key_id = telemetry_id, terminal_id, event_time, ingest_time, lag_seconds;
+    union late_auth, late_tel
+}
+
+.create-or-alter function fn_dq_rule4_clock_skew() {
+    union
+        (auth_curated | project terminal_id, clock_skew_seconds),
+        (telemetry_curated | project terminal_id, clock_skew_seconds)
+    | summarize avg_skew_seconds = avg(clock_skew_seconds),
+                min_skew_seconds = min(clock_skew_seconds),
+                max_skew_seconds = max(clock_skew_seconds),
+                sample_count = count()
+        by terminal_id
+    | where avg_skew_seconds != 0.0
+}
+
+.create-or-alter function fn_dq_rule5_schema_evolution() {
+    raw_auth_events
+    | summarize row_count = count(),
+                min_event_time = min(event_time),
+                max_event_time = max(event_time),
+                sca_populated = countif(isnotnull(sca_flag))
+        by schema_version
+    | order by schema_version asc
+}
+
+.create-or-alter function fn_dq_rule6_hot_cold_reconciliation() {
+    let auth_cmp =
+        (raw_auth_events | summarize hot_rows = count(), hot_amount = sum(amount) | extend stream = 'auth_events')
+        | join kind=inner (
+            raw_auth_events_cold | summarize cold_rows = count(), cold_amount = sum(amount) | extend stream = 'auth_events'
+          ) on stream;
+    let tel_cmp =
+        (raw_terminal_telemetry | summarize hot_rows = count() | extend stream = 'terminal_telemetry', hot_amount = real(null))
+        | join kind=inner (
+            raw_terminal_telemetry_cold | summarize cold_rows = count() | extend stream = 'terminal_telemetry', cold_amount = real(null)
+          ) on stream;
+    union auth_cmp, tel_cmp
+    | extend row_gap = hot_rows - cold_rows, amount_gap = hot_amount - cold_amount
+    | project stream, hot_rows, cold_rows, row_gap, hot_amount, cold_amount, amount_gap
+}
+
+// ============================================================================
+// VERIFY -- run separately. Expect 19.
+//   .show functions | count
+//
+// And confirm the six by name rather than by total, so a coincidental count
+// cannot pass for the right set:
+//   .show functions
+//   | project Name
+//   | where Name in ('fn_reflex2_terminal_compromise','fn_reflex3_terminal_dark',
+//                    'fn_dq_rule3_late_arrival','fn_dq_rule4_clock_skew',
+//                    'fn_dq_rule5_schema_evolution','fn_dq_rule6_hot_cold_reconciliation')
+//   | order by Name asc
+// Expect exactly 6 rows.
+//
+// IF ANY STATEMENT ERRORS: paste it verbatim. That would mean the missed-
+// selection theory is wrong and these six have a real KQL problem -- worth
+// knowing, because the fix would then be to the logic and not to the spacing.
+// ============================================================================

@@ -1,0 +1,8 @@
+// P1 T1 -- Terminals live  [stat]
+// Source: mv_terminal_last_seen (MV 3 of 3, arg_max per terminal).
+// Convention: as_of = _endTime, the dashboard's reference-window end.
+// Standalone test: prepend  let _endTime = datetime(2026-08-17 00:35:00);
+let as_of = _endTime;
+let dark_minutes = 20;
+mv_terminal_last_seen
+| summarize Value = countif(datetime_diff('minute', as_of, trusted_time) < dark_minutes)

@@ -1,0 +1,16 @@
+{
+  "_basis": "04_Model/MODEL_NOTES.md, section 'Precision (Reportable) is the one to read carefully' — 'Every other precision measure is unguarded and must not be bound to a visual.' Declared for validate_pbip.py rule UNGUARDED_MEASURE_BOUND (guide §120c). Written 2026-08-19, Session 7.",
+  "_why_a_file_and_not_a_convention": "There is no naming rule that separates a guarded measure from its source — 'Precision (Reportable)' and 'Precision (Ground Truth)' are the same shape. The project has to say so, once, where a linter can read it.",
+  "guards": [
+    {
+      "unguarded": "Precision (Ground Truth)",
+      "guarded": "Precision (Reportable)",
+      "reason": "blends maturity cohorts when more than one is in filter context; returns a confident wrong number instead of BLANK"
+    },
+    {
+      "unguarded": "Precision (Disputes)",
+      "guarded": "Precision (Reportable)",
+      "reason": "blends maturity cohorts when more than one is in filter context; returns a confident wrong number instead of BLANK"
+    }
+  ]
+}

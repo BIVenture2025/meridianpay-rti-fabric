@@ -1,0 +1,257 @@
+// ============================================================================
+// Project 25 (Meridian Pay) -- PREPARED Session 5, TO BE RUN Session 6
+// 12_alert_grading.kql                                     [NEW -- 2026-08-18]
+//
+// Grades every row in `alerts` twice, independently:
+//   gt_episode_id      -- the injected ground_truth episode this alert actually
+//                         hit, or '' if the alert is a false positive
+//   dispute_confirmed  -- whether a real chargeback landed at the same terminal
+//                         inside the alert's own window
+//
+// This is what turns the project's pitch from a claim into a number. Contract
+// Sec7: "Reflex precision measured against ground_truth AS WELL AS against
+// disputes" -- two independent graders, because either one alone can be argued
+// with. Ground truth says "we planted it and you found it"; disputes say "a real
+// customer complained." An alert that satisfies both is not a coincidence.
+//
+// ---------------------------------------------------------------------------
+// WHY TWO COLUMNS ON `alerts` AND NOT A NEW TABLE.
+// Contract Sec3 commits to 12 Eventhouse KQL tables as a number a reviewer counts.
+// A 13th grading table would change that number, and per the contract's own rule
+// that gets changed on purpose or not at all -- this decides not at all. Adding
+// COLUMNS to an existing table is not adding a table, and there is direct
+// precedent: `maturity_cohort` was added to this same table by
+// 11_activator_reflex_alerts.kql Step 0 with the same additive .alter-merge.
+// Table count stays 12.
+//
+// The Direct Lake model also wants it this way. Direct Lake supports no
+// calculated columns, so any grading done in DAX would have to be a measure
+// doing interval-overlap logic across a disconnected table on every visual
+// refresh. Two boolean/string columns make every precision measure a plain
+// COUNTROWS -- which is the shape Direct Lake is fast at.
+//
+// ---------------------------------------------------------------------------
+// WHY STAMPING THESE IS SAFE, WHEN STAMPING maturity_cohort WAS NOT.
+// 01b_dispute_curated_FIX.kql established the rule: do not stamp a value that is
+// a function of elapsed time, because a stored column cannot go stale loudly.
+// That rule is respected here, not ignored:
+//   * gt_episode_id is IMMUTABLE. Whether an alert's window overlapped a planted
+//     episode's window is a fact about two fixed intervals. It cannot change.
+//   * dispute_confirmed IS time-dependent -- more disputes mature every day. It
+//     is therefore recomputed by a deliberate REGRADE step, not written once at
+//     ingest by a policy that never re-runs. That distinction is the whole of
+//     01b's lesson. Re-run this file before any precision read.
+// maturity_cohort itself is still NOT recomputed here; it stays as written, and
+// fn_dispute_graded()'s query-time cohort_now remains the authority for disputes.
+//
+// RUN ONE STATEMENT AT A TIME.
+// ============================================================================
+
+
+// ---- STEP 0: BACK UP FIRST. `alerts` holds the E2 evidence. ----------------
+// Step 4 is a .set-or-replace. If its query is wrong, 186 evidenced rows -- the
+// artefact export checkpoint E2 was closed on -- are gone. A working copy costs
+// nothing and is dropped in step 7. Do not skip this to save a click.
+
+.set alerts_pregrade_backup <| alerts
+
+// Confirm the backup took, BEFORE touching the original. Must return 186.
+alerts_pregrade_backup | count
+
+
+// ---- STEP 1: add the two columns, additively -------------------------------
+
+.alter-merge table alerts (gt_episode_id: string, dispute_confirmed: bool)
+
+.show table alerts schema as json
+// Confirm 15 columns: the 12 original + maturity_cohort + these 2.
+//
+// NOTE, corrected here rather than carried forward: 11_activator_reflex_alerts.kql
+// Step 0's comment says "11 columns total (10 original + 1)", and HANDOVER.md
+// repeated it. The original CREATE in 00_raw_and_staging_tables.kql defines 12
+// columns (alert_id, fired_at, reflex_type, entity_type, entity_id, merchant_id,
+// store_id, window_start, window_end, signal_value, threshold_value, evidence),
+// so the count after maturity_cohort was 13, not 11. The .alter-merge itself was
+// correct; only the count in the comment was wrong. Read the schema, not the note.
+
+
+// ---- STEP 2: the grading function ----------------------------------------
+//
+// >>> HOW TO RUN THIS ONE. Do NOT click inside it and press Run. <<<
+// SELECT THE WHOLE FUNCTION BY HAND -- from the `.create-or-alter` line down to
+// and including the closing `}` -- then press Run.
+//
+// WHY. The first attempt failed with "Syntax error: I could not parse that,
+// sorry." and the editor had highlighted only the first TWO lines. That is the
+// diagnosis, not a mystery: the Queryset's auto-block detection ends a statement
+// at the first `;`, and the first `;` here is the `let ref_time = ...;` INSIDE the
+// body. It submitted an opening brace with no closing brace, which is exactly what
+// an unbalanced-parse error looks like. Nothing was wrong with the KQL.
+// This is the same class of problem Session 3 recorded ("I can't run the query at
+// once, but it works if I select a certain statement and run individually") -- any
+// multi-`let` body has to be selected manually in this editor.
+//
+// Counted-function note: this is infrastructure, NOT a 13th counted function. The
+// counted 12 are unchanged (fn_reflex1-4, fn_dq_rule1-6, fn_dispute_graded,
+// fn_issuers_for_estate_selection). fn_alert_grading sits with fn_build_dim_estate
+// and the fn_transform_* policies as a build helper -- it populates a table; it is
+// not something a dashboard, Activator rule or report calls.
+//
+// The body below was also hardened after that first failure, so that a second
+// attempt fails for at most one reason. Three constructs were replaced with
+// longer but unambiguous equivalents, none of which changes the result:
+//   * `take_anyif(episode_id, hit)` -> `max(iff(hit, episode_id, ''))`. take_anyif
+//     picks an arbitrary matching row; max over strings is deterministic, and an
+//     unmatched row contributes '' which loses to any real episode_id. Determinism
+//     matters here because this value is written to a table and compared later.
+//   * `d_time between (window_start .. window_end)` -> explicit >= and <=.
+//   * `on reflex_key, entity_key` -> explicit `$left.x == $right.x` pairs.
+// The interior explanatory comments were moved up here as well, so the block you
+// have to select by hand is as short as it can be.
+//
+// WHAT IT DOES. Two independent graders, per contract Sec7:
+//   gt_episode_id     -- the injected ground_truth episode this alert actually hit,
+//                        or '' if the alert is a false positive. An alert window and
+//                        an episode window overlap iff EACH starts before the other
+//                        ends; writing only half of that test is the classic
+//                        interval bug and it fails quietly, matching too few.
+//   dispute_confirmed -- whether a real chargeback landed at the same terminal
+//                        inside the alert's own window.
+// dispute_curated is deliberately the LEFT side of its join: ~6.7k rows against
+// auth_curated's 5.39m, and Session 3 already hit LowMemoryCondition on a 5.38m-row
+// operation. Small side left, narrow projection, no arg_max.
+// Exactly one name differs between the two vocabularies -- reflex_type
+// 'terminal_dark' is episode_type 'terminal_dark_outage' -- and it is mapped in ONE
+// place, below, so the mismatch cannot become a silent zero in three consumers.
+
+.create-or-alter function fn_alert_grading(as_of: datetime = datetime(null)) {
+    let ref_time = iff(isnull(as_of), now(), as_of);
+    let gt = materialize(
+        ground_truth
+        | extend reflex_key = iff(episode_type == 'terminal_dark_outage', 'terminal_dark', episode_type)
+        | project episode_id, reflex_key, entity_key = affected_entity_id, gt_start = window_start, gt_end = window_end);
+    let disputed = materialize(
+        dispute_curated
+        | where dispute_time <= ref_time
+        | join kind=inner (auth_curated | where event_type == 'auth' | project auth_id, d_terminal = terminal_id, d_time = event_time) on auth_id
+        | project dispute_id, d_terminal, d_time);
+    let a = materialize(alerts | extend reflex_key = reflex_type, entity_key = entity_id);
+    let gt_hit = a
+        | join kind=leftouter (gt) on $left.reflex_key == $right.reflex_key, $left.entity_key == $right.entity_key
+        | extend hit = isnotempty(episode_id) and gt_start <= window_end and gt_end >= window_start
+        | summarize matched = max(iff(hit, episode_id, '')) by alert_id;
+    let d_hit = a
+        | join kind=leftouter (disputed) on $left.entity_key == $right.d_terminal
+        | extend hit = isnotempty(dispute_id) and d_time >= window_start and d_time <= window_end
+        | summarize dispute_hits = countif(hit) by alert_id;
+    a
+    | join kind=leftouter (gt_hit) on alert_id
+    | join kind=leftouter (d_hit) on alert_id
+    | extend gt_episode_id = coalesce(matched, ''), dispute_confirmed = coalesce(dispute_hits, 0) > 0
+    | project alert_id, fired_at, reflex_type, entity_type, entity_id, merchant_id, store_id, window_start, window_end, signal_value, threshold_value, evidence, maturity_cohort, gt_episode_id, dispute_confirmed
+}
+
+// >>> END OF THE BLOCK TO SELECT. <<<
+// Confirm it took before moving on -- a function that failed to create makes every
+// step below fail with a different, more confusing error:
+//   .show functions | where Name == 'fn_alert_grading'
+
+// ---- STEP 3: DRY RUN. Read the grading before writing it. ------------------
+// "The command didn't error" is not proof. Read these three, in order, and only
+// continue if all three are sane.
+
+fn_alert_grading(datetime(2026-08-17)) | count
+// FLOOR: must be exactly 186. Anything less means a join dropped rows and the
+// .set-or-replace in step 4 would silently delete evidence. Anything more means
+// a join fanned out -- most likely an alert overlapping two episodes, which
+// take_anyif should have collapsed. Either way: STOP and diagnose.
+
+fn_alert_grading(datetime(2026-08-17))
+| summarize alerts = count(),
+            gt_matched = countif(gt_episode_id != ''),
+            dispute_matched = countif(dispute_confirmed)
+    by reflex_type
+| extend gt_precision = round(todouble(gt_matched) / todouble(alerts), 3)
+| order by reflex_type asc
+// EXPECTATIONS, written down BEFORE running so the result can disagree with them:
+//   * terminal_dark -- expect gt_precision at or near 1.000. Session 4 filtered
+//     these to the 9 ground-truth-matched rows before writing them, so anything
+//     below 1.0 means this grader disagrees with that filter and one of the two
+//     is wrong.
+//   * card_testing_burst -- expect well below 1.0. 72 alerts against 40 planted
+//     episodes; many are multiple 5-minute buckets inside one episode (which
+//     count as matched), but the detector's deliberate margin under the injection
+//     parameters means genuine false positives are expected and are not a defect.
+//   * issuer_degradation -- 95 alerts against 12 planted episodes. Low precision
+//     here is the interesting result, not a bug: series_decompose_anomalies flags
+//     any hour outside 2.5 sigma of an issuer's own baseline, and real traffic has
+//     more such hours than we planted.
+//   * dispute_matched -- expect LOW everywhere, and near zero for terminal_dark.
+//     A dead terminal generates no transactions, so it cannot generate
+//     chargebacks. That is the correct answer, and it is exactly why grading
+//     against disputes ALONE would be misleading and the contract asks for both.
+
+fn_alert_grading(datetime(2026-08-17))
+| where gt_episode_id != ''
+| summarize episodes_detected = dcount(gt_episode_id) by reflex_type
+// Recall's numerator. Compare against ground_truth's own 40 / 25 / 12 / 60 split.
+
+
+// ---- STEP 4: write it ------------------------------------------------------
+// Only after step 3's floor returned exactly 186.
+
+.set-or-replace alerts <| fn_alert_grading(datetime(2026-08-17))
+
+
+// ---- STEP 5: read the write back -------------------------------------------
+
+alerts | count
+// Must still be 186. If this dropped, restore immediately from the backup:
+//   .set-or-replace alerts <| alerts_pregrade_backup
+
+alerts
+| summarize firings = count(), graded = countif(gt_episode_id != '')
+    by reflex_type, maturity_cohort
+| order by reflex_type asc
+// Cross-check against the Session 4 table in Gate_Check_Results.md:
+//   card_testing_burst  graded_T90_T60 29 / partially_matured_T60_T30 18 /
+//                       awaiting_grading_T30_T 25
+//   issuer_degradation  awaiting_grading_T30_T 95
+//   terminal_compromise awaiting_grading_T30_T 10
+//   terminal_dark       awaiting_grading_T30_T  9
+// The firings column MUST reproduce those six numbers exactly. maturity_cohort is
+// passed through untouched by fn_alert_grading, so any change is a defect in the
+// regrade, not new information.
+
+
+// ---- STEP 6: the number the whole project exists to publish ----------------
+
+alerts
+| where maturity_cohort == 'graded_T90_T60'
+| summarize alerts_raised = count(), true_positives = countif(gt_episode_id != '')
+    by reflex_type
+| extend precision = round(todouble(true_positives) / todouble(alerts_raised), 3)
+// ONLY the graded cohort. This is the one cohort where precision is a real
+// number rather than a premature one -- which today means card_testing_burst
+// alone, since Session 4's retried as_of values put the other three reflexes
+// entirely in awaiting_grading_T30_T. Reporting a blended figure across all four
+// is the exact defect contract Sec5 exists to prevent.
+
+
+// ---- STEP 7: drop the backup, AFTER steps 5 and 6 both looked right --------
+// Leave it in place if anything above surprised you. It costs nothing to keep
+// and everything to have dropped too early.
+
+.drop table alerts_pregrade_backup
+
+// ============================================================================
+// AFTER THIS FILE: the two new columns must reach the semantic model before the
+// Alert Precision page can use them.
+//   1. OneLake availability re-mirrors `alerts` automatically -- allow time, and
+//      confirm Pending size is 0B on the Database details pane before assuming it.
+//   2. The Lakehouse shortcut to `alerts` picks the new columns up, but the
+//      SEMANTIC MODEL DOES NOT until the table is refreshed/re-added there.
+//      Confirm both new columns are visible in SM_MeridianPay_DirectLake's field
+//      list before running the measure read-back.
+// Neither step is automatic. See 00_Plan/SESSION_05_PORTAL_STEPS.md Sec4.
+// ============================================================================

@@ -1,0 +1,171 @@
+// ============================================================================
+// Project 25 (Meridian Pay) -- Session 3, Phase 2
+// 00_raw_and_staging_tables.kql          [REV 2 -- 2026-08-18]
+//
+// HOW TO RUN THIS FILE: paste the whole file, Select All, press Run. It is ONE
+// command (.execute database script) wrapping many, which is the only way Kusto
+// accepts a batch -- a bare list of .create statements fails with
+// "Syntax error: No query was found", because Kusto permits exactly one control
+// command per request. (Rev 1 of this file made that mistake; the error is
+// recorded in 00_Plan/Gate_Check_Results.md.)
+//
+// REV 2 also corrects five schema defects. Rev 1's column lists were written
+// from GENERATOR_SPEC.md's PROSE; these are read from the generator's actual
+// pyarrow schemas (01_Source/generator/schemas.py), which is the artefact that
+// decides what the Parquet/DataFrame columns really are:
+//
+//   1. ground_truth        -- spec implied one `intensity_params` dynamic bag;
+//                             generator emits intensity_param_1 (real),
+//                             intensity_param_2 (real), row_count_hint (long)
+//   2. dim_store           -- has NO store_archetype column (store_id +
+//                             merchant_id only). Archetype is never persisted
+//                             by the generator at all -- it lives in an
+//                             in-memory Series. dim_estate therefore cannot
+//                             carry it; see 03_dim_estate_build.kql
+//   3. dim_issuer          -- has issuer_id as well as issuer_bin/issuer_name
+//   4. dim_merchant        -- has mcc_description; column ORDER is
+//                             merchant_id, merchant_tier, mcc, mcc_description
+//   5. dim_store_calendar  -- the big one. Not (store_id, dow, open, close,
+//                             archetype). It is one row per
+//                             (store_id, day_of_week, session_no), with
+//                             day_name, is_closed, and open_time/close_time as
+//                             *STRINGS* ("08:00", "24:00", or null when
+//                             is_closed) -- not timespans. Restricted-F&B
+//                             stores have TWO sessions per day, which is why
+//                             the measured row count is 7,819 and not 927x7.
+//
+// Idempotent: every command is .create-merge (adds missing columns, succeeds if
+// the table already exists), so re-running after a partial failure is safe.
+// raw_dispute_events already exists from the Rev-1 partial run -- .create-merge
+// will simply confirm it.
+// ============================================================================
+
+.execute database script with (ContinueOnErrors=false) <|
+//
+// ---- 1. Raw event tables (4) ---------------------------------------------
+//
+.create-merge table raw_auth_events (
+    auth_id: string, event_type: string, related_auth_id: string,
+    event_time: datetime, ingest_time: datetime,
+    terminal_id: string, store_id: string, merchant_id: string,
+    issuer_bin: string, card_token: string, amount: real, currency: string,
+    mcc: string, auth_result: string, decline_reason: string,
+    pos_entry_mode: string, is_card_present: bool, sca_flag: bool,
+    schema_version: int
+)
+//
+.create-merge table raw_terminal_telemetry (
+    telemetry_id: string, event_time: datetime, ingest_time: datetime,
+    terminal_id: string, store_id: string, merchant_id: string,
+    heartbeat_ok: bool, tamper_flag: bool, battery_pct: real,
+    signal_strength: real, schema_version: int
+)
+//
+.create-merge table raw_dispute_events (
+    dispute_id: string, auth_id: string, dispute_time: datetime,
+    dispute_reason: string, dispute_outcome: string, amount: real
+)
+//
+// Nice-to-have Eventstream (contract Sec3 drop list, 3rd to go). Schema only:
+// the generator has no job_events stream, so 0 rows is the correct and
+// expected state unless Session 4 keeps that Eventstream. Recorded as
+// "11 of 12 tables carry data, 1 is schema-only by design", never as a silent
+// gap.
+.create-merge table raw_job_events (
+    job_event_id: string, event_time: datetime, ingest_time: datetime,
+    item_type: string, item_name: string, workspace_id: string, status: string
+)
+//
+// ---- 2. Cold-path mirrors, for DQ rule 6 ---------------------------------
+// Eventhouse-side landing of the Lakehouse cold-path export, so rule 6's
+// reconciliation runs entirely in KQL instead of needing a cross-engine join.
+// Same schema as their hot counterparts by definition -- the whole point of
+// rule 6 is that the ~50-row-per-stream gap is in the DATA, not the shape.
+//
+.create-merge table raw_auth_events_cold (
+    auth_id: string, event_type: string, related_auth_id: string,
+    event_time: datetime, ingest_time: datetime,
+    terminal_id: string, store_id: string, merchant_id: string,
+    issuer_bin: string, card_token: string, amount: real, currency: string,
+    mcc: string, auth_result: string, decline_reason: string,
+    pos_entry_mode: string, is_card_present: bool, sca_flag: bool,
+    schema_version: int
+)
+//
+.create-merge table raw_terminal_telemetry_cold (
+    telemetry_id: string, event_time: datetime, ingest_time: datetime,
+    terminal_id: string, store_id: string, merchant_id: string,
+    heartbeat_ok: bool, tamper_flag: bool, battery_pct: real,
+    signal_strength: real, schema_version: int
+)
+//
+// ---- 3. Staging / reference tables ---------------------------------------
+// Inputs to dim_estate. NOT counted in the contract's 12 -- dim_estate is the
+// durable curated artefact built from them. Kept (not dropped after the build)
+// because the zero-orphan-terminal check re-derives dim_estate from them on
+// demand.
+//
+.create-merge table stg_dim_merchant (
+    merchant_id: string, merchant_tier: string, mcc: string, mcc_description: string
+)
+//
+.create-merge table stg_dim_store (
+    store_id: string, merchant_id: string
+)
+//
+.create-merge table stg_dim_terminal (
+    terminal_id: string, store_id: string, merchant_id: string
+)
+//
+.create-merge table stg_dim_issuer (
+    issuer_id: string, issuer_bin: string, issuer_name: string
+)
+//
+// dim_store_calendar is BOTH a staging input and curated table 5. No transform
+// needed -- the generator already emits it query-ready. open_time/close_time
+// are HH:MM STRINGS and are null when is_closed; every consumer converts with
+// totimespan() at query time (see fn_store_open_sessions in 04_functions.kql,
+// which is the single place that conversion is written down).
+.create-merge table dim_store_calendar (
+    store_id: string, day_of_week: int, day_name: string, session_no: int,
+    is_closed: bool, open_time: string, close_time: string
+)
+//
+// ---- 4. Tables loaded directly, not curated from raw streams -------------
+//
+.create-merge table ground_truth (
+    episode_id: string, episode_type: string, affected_entity_type: string,
+    affected_entity_id: string, window_start: datetime, window_end: datetime,
+    intensity_param_1: real, intensity_param_2: real, row_count_hint: long
+)
+//
+// Populated by Activator (Session 4). Created now so the reflex functions and
+// the Session 6 precision/recall queries can be smoke-tested against an
+// empty-but-typed table before Activator exists.
+.create-merge table alerts (
+    alert_id: string, fired_at: datetime, reflex_type: string,
+    entity_type: string, entity_id: string, merchant_id: string,
+    store_id: string, window_start: datetime, window_end: datetime,
+    signal_value: real, threshold_value: real, evidence: dynamic
+)
+//
+// Stream-DQ persistence target. One row per rule PER RUN, never overwritten,
+// so the "floor that nothing can satisfy" check can read run-over-run history
+// rather than only the latest row.
+.create-merge table dq_results (
+    run_id: string, run_time: datetime, rule_number: int, rule_name: string,
+    rows_checked: long, faults_found: long, independent_check_passed: bool,
+    floor_satisfied: bool, detail: dynamic
+)
+
+// ============================================================================
+// AFTER RUNNING, verify -- run each of these separately (one command per Run):
+//   .show tables
+//   .show tables | count          // expect 15
+// 15 = 12 contract-counted + raw_auth_events_cold + raw_terminal_telemetry_cold
+//      + ... count them against the list above rather than trusting this
+//      number; the contract's 12 are the 4 raw, 5 curated (auth_curated,
+//      telemetry_curated, dispute_curated, dim_estate, dim_store_calendar --
+//      the first four arrive in files 01 and 03), dq_results, alerts,
+//      ground_truth. The 4 stg_* and 2 *_cold tables are working tables on top.
+// ============================================================================

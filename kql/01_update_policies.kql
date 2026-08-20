@@ -1,0 +1,172 @@
+// ============================================================================
+// Project 25 (Meridian Pay) -- Session 3, Phase 2
+// 01_update_policies.kql                  [REV 2 -- 2026-08-18]
+//
+// The transformation layer -- the structural claim of the whole project
+// (OUTCOME_CONTRACT.md component 3): no Silver/Gold Spark notebook, KQL update
+// policies clean at ingest time instead.
+//
+// HOW TO RUN -- READ THIS. On this workspace, .execute database script does
+// NOT reliably run as a single batch from the Queryset (confirmed by the user,
+// 2026-08-18: "I can't run the query at once, but it works if I select a
+// certain statement and run individually"). The .execute database script
+// wrapper is retained below because it is correct KQL and works from other
+// clients, but THE WORKING PROCEDURE IN THIS QUERYSET IS:
+//
+//     click inside one statement -> press Run -> repeat, top to bottom.
+//
+// Statements are separated by blank lines so the Queryset picks up exactly one
+// per Run. Order matters: table, then its function, then its policy.
+//
+// REV 2 changes: wrapped in .execute database script; .create-or-alter function
+// instead of .create function (idempotent); policy JSON given as a single-line
+// @'...' literal instead of a ```-fenced block, which is what survives inside a
+// batch script.
+//
+// Run AFTER 00_raw_and_staging_tables.kql and BEFORE any data is ingested --
+// an update policy only fires on rows ingested after it is attached. If data
+// already landed, use the catch-up commands at the bottom of this file.
+//
+// Division of labour, deliberate: dedupe (rule 1), a declared trusted
+// timestamp (rule 4) and a late-arrival flag (rule 3) happen HERE, because
+// every downstream consumer wants them for free. DETECTION and COUNTING of the
+// six faults, with independent structural checks and floors, is a separate
+// pass in 05_dq_rules_run.kql. A policy silently fixing a fault and a rule
+// proving the fault was real are two different jobs, kept in two files.
+// ============================================================================
+
+.execute database script with (ContinueOnErrors=false) <|
+//
+// ---- auth_curated ---------------------------------------------------------
+//
+.create-merge table auth_curated (
+    auth_id: string,
+    event_type: string,
+    related_auth_id: string,
+    event_time: datetime,
+    ingest_time: datetime,
+    trusted_time: datetime,
+    clock_skew_seconds: real,
+    is_late_arrival: bool,
+    terminal_id: string,
+    store_id: string,
+    merchant_id: string,
+    issuer_bin: string,
+    card_token: string,
+    amount: real,
+    currency: string,
+    mcc: string,
+    auth_result: string,
+    decline_reason: string,
+    pos_entry_mode: string,
+    is_card_present: bool,
+    sca_flag: bool,
+    sca_flag_known: bool,
+    schema_version: int
+)
+//
+// trusted_time = ingest_time. Decision, stated once here: ingest_time is
+// platform-controlled and immune to per-terminal clock skew (rule 4), so every
+// time-bucketed dashboard/MV/reflex reads trusted_time and never event_time.
+// event_time is retained for audit and for measuring the skew itself.
+// sca_flag_known is false for schema_version=1 rows (rule 5): the field is
+// "not yet collected", which is NOT the same as null-as-error.
+.create-or-alter function fn_transform_auth_curated() {
+    raw_auth_events
+    | summarize arg_max(ingest_time, *) by auth_id
+    | extend trusted_time = ingest_time
+    | extend clock_skew_seconds = todouble(datetime_diff('second', ingest_time, event_time))
+    | extend is_late_arrival = abs(clock_skew_seconds) > 900.0
+    | extend sca_flag_known = schema_version >= 2
+    | extend sca_flag = iff(schema_version >= 2, sca_flag, false)
+    | project auth_id, event_type, related_auth_id, event_time, ingest_time,
+              trusted_time, clock_skew_seconds, is_late_arrival, terminal_id,
+              store_id, merchant_id, issuer_bin, card_token, amount, currency,
+              mcc, auth_result, decline_reason, pos_entry_mode, is_card_present,
+              sca_flag, sca_flag_known, schema_version
+}
+//
+.alter table auth_curated policy update @'[{"IsEnabled":true,"Source":"raw_auth_events","Query":"fn_transform_auth_curated()","IsTransactional":false,"PropagateIngestionProperties":false}]'
+//
+// ---- telemetry_curated ----------------------------------------------------
+//
+.create-merge table telemetry_curated (
+    telemetry_id: string,
+    event_time: datetime,
+    ingest_time: datetime,
+    trusted_time: datetime,
+    clock_skew_seconds: real,
+    is_late_arrival: bool,
+    terminal_id: string,
+    store_id: string,
+    merchant_id: string,
+    heartbeat_ok: bool,
+    tamper_flag: bool,
+    battery_pct: real,
+    signal_strength: real,
+    schema_version: int
+)
+//
+.create-or-alter function fn_transform_telemetry_curated() {
+    raw_terminal_telemetry
+    | summarize arg_max(ingest_time, *) by telemetry_id
+    | extend trusted_time = ingest_time
+    | extend clock_skew_seconds = todouble(datetime_diff('second', ingest_time, event_time))
+    | extend is_late_arrival = abs(clock_skew_seconds) > 900.0
+    | project telemetry_id, event_time, ingest_time, trusted_time,
+              clock_skew_seconds, is_late_arrival, terminal_id, store_id,
+              merchant_id, heartbeat_ok, tamper_flag, battery_pct,
+              signal_strength, schema_version
+}
+//
+.alter table telemetry_curated policy update @'[{"IsEnabled":true,"Source":"raw_terminal_telemetry","Query":"fn_transform_telemetry_curated()","IsTransactional":false,"PropagateIngestionProperties":false}]'
+//
+// ---- dispute_curated ------------------------------------------------------
+// CORRECTED 2026-08-18. An earlier revision had this policy join auth_curated
+// to stamp a maturity_cohort column at ingest time. Kusto rejected it --
+// InvalidPolicyOperationException -- because an update policy query may read
+// only its declared Source table. Full reasoning in 01b_dispute_curated_FIX.kql.
+//
+// The rejection was correct on the merits, not merely a platform limit: cohort
+// is a function of ELAPSED time, so a column stamped at ingest goes stale
+// silently (a 'partially_matured_T60_T30' dispute becomes 'graded_T90_T60'
+// thirty days later, and the stored value never moves). Cohort now lives in
+// fn_dispute_graded(), evaluated at query time. This policy does dedupe only,
+// matching the two above it.
+//
+.create-merge table dispute_curated (
+    dispute_id: string,
+    auth_id: string,
+    dispute_time: datetime,
+    dispute_reason: string,
+    dispute_outcome: string,
+    amount: real
+)
+//
+.create-or-alter function fn_transform_dispute_curated() {
+    raw_dispute_events
+    | summarize arg_max(dispute_time, *) by dispute_id
+    | project dispute_id, auth_id, dispute_time, dispute_reason,
+              dispute_outcome, amount
+}
+//
+.alter table dispute_curated policy update @'[{"IsEnabled":true,"Source":"raw_dispute_events","Query":"fn_transform_dispute_curated()","IsTransactional":false,"PropagateIngestionProperties":false}]'
+
+// ============================================================================
+// No update policy on raw_job_events -- deliberately not pre-built for a
+// component that may be dropped (contract Sec3 drop list). If Session 4 keeps
+// the job-events Eventstream, add job_events_curated then, same pattern.
+//
+// ---- Backfill catch-up ----------------------------------------------------
+// ONLY if raw_* already had rows BEFORE this file ran. Update policies do not
+// fire retroactively. Check first (`auth_curated | count`), then run each of
+// these as its own single command:
+//
+//   .set-or-append auth_curated <| fn_transform_auth_curated()
+//   .set-or-append telemetry_curated <| fn_transform_telemetry_curated()
+//   .set-or-append dispute_curated <| fn_transform_dispute_curated()
+//
+// Order matters for the third: dispute_curated joins auth_curated, so auth
+// must be materialized first or every dispute lands as
+// 'unresolved_original_missing'.
+// ============================================================================

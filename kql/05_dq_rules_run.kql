@@ -1,0 +1,122 @@
+// ============================================================================
+// Project 25 (Meridian Pay) -- Session 3, Phase 2
+// 05_dq_rules_run.kql
+//
+// Runs all six stream DQ rules and persists ONE ROW PER RULE, PER RUN to
+// dq_results. Never overwrites -- run history is itself evidence that the
+// "floor" (a rule finding zero faults is suspicious, not clean) holds up over
+// multiple runs, not just the first one.
+//
+// Rules 1-3 each carry an INDEPENDENT DOWNSTREAM STRUCTURAL CHECK, per
+// contract Sec5's design rule ("the cell didn't error is not proof"). Every
+// rule carries a FLOOR that "nothing" cannot satisfy (CORE_RULES Appendix C
+// 12) -- for rules 1-5 the floor is "the known-nonzero injection count from
+// Landing_Manifest.csv's fault_rules_applied register was actually found";
+// for rule 6 the floor is "the deliberately-injected ~50-row cold-path gap
+// was actually found", not merely "the query returned rows".
+//
+// Run AFTER the backfill has loaded (raw_*, raw_*_cold, curated tables all
+// populated). Run early against an empty database and every rule reports 0
+// faults, 0 checked, floor_satisfied=false -- correct (nothing to find yet),
+// and must NOT be read as a passing result.
+//
+// SET run_id BEFORE running -- replace 'RUN_ID_PLACEHOLDER' below with
+// something like 'session3-run1' so multiple runs in one session stay
+// distinguishable in dq_results without relying on run_time precision alone.
+// ============================================================================
+
+let run_id_ = "RUN_ID_PLACEHOLDER";
+let run_time_ = now();
+//
+// ---- Rule 1: idempotent dedupe ---------------------------------------
+let r1_faults = toscalar(fn_dq_rule1_dedupe() | summarize sum(duplicate_rows));
+let r1_checked = toscalar(raw_auth_events | count | project Count);
+let r1_independent = toscalar(auth_curated | summarize c = count() by auth_id | where c > 1 | count | project Count) == 0;
+//
+// ---- Rule 2: out-of-order reversal resolution --------------------------
+// Independent check: every out-of-order reversal's ORIGINAL still appears
+// exactly once in auth_curated (rule 1's dedupe did not collide with it) AND,
+// once both are read by event_time rather than ingest_time, the original
+// precedes the reversal -- i.e. the disorder is an ingest-time artefact only,
+// never a true event-time inversion, which is what "resolution" means here.
+let r2_out_of_order = fn_dq_rule2_out_of_order();
+let r2_faults = toscalar(r2_out_of_order | count | project Count);
+let r2_checked = toscalar(raw_auth_events | where event_type in ("reversal", "partial_capture") | count | project Count);
+let r2_structural_fail = toscalar(
+    r2_out_of_order
+    | join kind=inner (auth_curated | project auth_id, curated_event_time = event_time) on auth_id
+    | join kind=inner (auth_curated | project related_auth_id = auth_id, original_curated_event_time = event_time) on related_auth_id
+    | where curated_event_time < original_curated_event_time   // still inverted even in TRUE time -> real defect
+    | count | project Count);
+let r2_independent = r2_structural_fail == 0;
+//
+// ---- Rule 3: late arrival past watermark -------------------------------
+// Independent check: every row rule 3 flags in RAW as late-arriving is
+// flagged is_late_arrival=true in the CURATED table too -- proves the flag
+// propagated through the update policy via a join, not a re-run of the same
+// filter (which would trivially agree with itself).
+let r3_late = fn_dq_rule3_late_arrival();
+let r3_faults = toscalar(r3_late | count | project Count);
+let r3_checked = toscalar((raw_auth_events | count | project Count) + (raw_terminal_telemetry | count | project Count));
+let r3_structural_fail = toscalar(
+    r3_late
+    | where stream == "auth_events"
+    | join kind=inner (auth_curated | project terminal_id, event_time, is_late_arrival) on terminal_id, event_time
+    | where is_late_arrival == false
+    | count | project Count);
+let r3_independent = r3_structural_fail == 0;
+//
+// ---- Rule 4: device clock skew -----------------------------------------
+let r4_skew = fn_dq_rule4_clock_skew();
+let r4_faults = toscalar(r4_skew | count | project Count);   // terminals with nonzero avg skew
+let r4_checked = toscalar(stg_dim_terminal | count | project Count);
+//
+// ---- Rule 5: payload schema evolution ----------------------------------
+let r5_versions = fn_dq_rule5_schema_evolution();
+let r5_v1_present = toscalar(r5_versions | where schema_version == 1 | count | project Count) > 0;
+let r5_v2_present = toscalar(r5_versions | where schema_version == 2 | count | project Count) > 0;
+let r5_faults = toscalar(r5_versions | where schema_version == 2 | summarize sum(row_count));   // rows carrying the new field
+let r5_checked = toscalar(raw_auth_events | count | project Count);
+//
+// ---- Rule 6: hot-vs-cold reconciliation ----------------------------------
+let r6_recon = fn_dq_rule6_hot_cold_reconciliation();
+let r6_faults = toscalar(r6_recon | summarize sum(abs(row_gap)));
+let r6_checked = toscalar(r6_recon | summarize sum(hot_rows));
+//
+// ---- Assemble and persist -------------------------------------------------
+let rows = datatable(run_id: string, run_time: datetime, rule_number: int, rule_name: string,
+    rows_checked: long, faults_found: long, independent_check_passed: bool, floor_satisfied: bool, detail: dynamic)
+[
+    run_id_, run_time_, 1, "idempotent_dedupe_auth_id",
+        r1_checked, r1_faults, r1_independent, r1_faults > 0,
+        dynamic(null),
+    run_id_, run_time_, 2, "out_of_order_reversal_resolution",
+        r2_checked, r2_faults, r2_independent, r2_faults > 0,
+        dynamic(null),
+    run_id_, run_time_, 3, "late_arrival_past_watermark",
+        r3_checked, r3_faults, r3_independent, r3_faults > 0,
+        dynamic(null),
+    run_id_, run_time_, 4, "device_clock_skew",
+        r4_checked, r4_faults, bool(null), r4_faults > 0,
+        dynamic(null),
+    run_id_, run_time_, 5, "payload_schema_evolution",
+        r5_checked, r5_faults, bool(null), (r5_v1_present and r5_v2_present),
+        dynamic(null),
+    run_id_, run_time_, 6, "hot_vs_cold_reconciliation",
+        r6_checked, r6_faults, bool(null), r6_faults > 0,
+        dynamic(null),
+];
+rows
+| extend detail = case(
+    rule_number == 1, bag_pack("independent_check", "auth_curated has zero auth_id groups with count>1", "expected_floor_source", "Landing_Manifest.csv fault_rules_applied.rule1_duplicate_auth (raw), matched to auth_curated rows checked"),
+    rule_number == 2, bag_pack("independent_check", "flagged reversals' TRUE event_time still precedes their original's -- structural_fail must be 0", "expected_floor_source", "Landing_Manifest.csv fault_rules_applied.rule2_reorder_reversals"),
+    rule_number == 3, bag_pack("independent_check", "raw-flagged late rows are also is_late_arrival=true in curated, via a join not a re-filter", "expected_floor_source", "Landing_Manifest.csv fault_rules_applied.rule3_late_burst_auth + rule3_late_burst_telemetry"),
+    rule_number == 4, bag_pack("expected_floor_source", "Landing_Manifest.csv fault_rules_applied.rule4_clock_skew_*_terminals_affected -- every terminal should show nonzero skew"),
+    rule_number == 5, bag_pack("expected_floor_source", "both schema_version=1 and =2 rows must exist -- Landing_Manifest.csv fault_rules_applied.rule5_schema_cutover_applied_at"),
+    rule_number == 6, bag_pack("expected_floor_source", "Landing_Manifest.csv fault_rules_applied.rule6_cold_path_gap_auth + rule6_cold_path_gap_telemetry (~50 each, by design)"),
+    dynamic(null))
+| project run_id, run_time, rule_number, rule_name, rows_checked, faults_found, independent_check_passed, floor_satisfied, detail
+
+// After reviewing the output above, persist it:
+// .set-or-append dq_results <| <paste the query above, or re-run with the
+//   trailing '| project ...' piped into '.set-or-append dq_results <|'>

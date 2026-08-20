@@ -1,0 +1,62 @@
+// Project 25 -- measure read-back script.
+// Contract exit criterion: 'Every measure definition read back against its
+// rendered value.' Run each statement against SM_MeridianPay_DirectLake and
+// record the value next to the visual that shows it. A measure that has never
+// been evaluated is not built, it is typed.
+
+EVALUATE ROW ( "Total Auths", [Total Auths] )
+
+EVALUATE ROW ( "Approved Auths", [Approved Auths] )
+
+EVALUATE ROW ( "Declined Auths", [Declined Auths] )
+
+EVALUATE ROW ( "Approval Rate %", [Approval Rate %] )
+
+EVALUATE ROW ( "Decline Rate %", [Decline Rate %] )
+
+EVALUATE ROW ( "Merchants", [Merchants] )
+
+EVALUATE ROW ( "Stores", [Stores] )
+
+EVALUATE ROW ( "Terminals", [Terminals] )
+
+EVALUATE ROW ( "Terminals with Alerts", [Terminals with Alerts] )
+
+EVALUATE ROW ( "Estate Coverage %", [Estate Coverage %] )
+
+EVALUATE ROW ( "Alerts Raised", [Alerts Raised] )
+
+EVALUATE ROW ( "Reflex Types Fired", [Reflex Types Fired] )
+
+// PENDING DEPENDENCY -- expect an error until 12_alert_grading.kql has run
+EVALUATE ROW ( "Disputes Matured", [Disputes Matured] )
+
+// PENDING DEPENDENCY -- expect an error until 12_alert_grading.kql has run
+EVALUATE ROW ( "Alerts Matched (Ground Truth)", [Alerts Matched (Ground Truth)] )
+
+// PENDING DEPENDENCY -- expect an error until 12_alert_grading.kql has run
+EVALUATE ROW ( "Alerts Confirmed (Disputes)", [Alerts Confirmed (Disputes)] )
+
+// PENDING DEPENDENCY -- expect an error until 12_alert_grading.kql has run
+EVALUATE ROW ( "Precision (Ground Truth)", [Precision (Ground Truth)] )
+
+// PENDING DEPENDENCY -- expect an error until 12_alert_grading.kql has run
+EVALUATE ROW ( "Precision (Disputes)", [Precision (Disputes)] )
+
+// PENDING DEPENDENCY -- expect an error until 12_alert_grading.kql has run
+EVALUATE ROW ( "Episodes In Scope", [Episodes In Scope] )
+
+// PENDING DEPENDENCY -- expect an error until 12_alert_grading.kql has run
+EVALUATE ROW ( "Episodes Detected", [Episodes Detected] )
+
+// PENDING DEPENDENCY -- expect an error until 12_alert_grading.kql has run
+EVALUATE ROW ( "Recall (Ground Truth)", [Recall (Ground Truth)] )
+
+EVALUATE ROW ( "Cohort Status", [Cohort Status] )
+
+// PENDING DEPENDENCY -- expect an error until 12_alert_grading.kql has run
+EVALUATE ROW ( "Precision (Reportable)", [Precision (Reportable)] )
+
+EVALUATE ROW ( "DQ Rules Passed", [DQ Rules Passed] )
+
+EVALUATE ROW ( "DQ Rows Flagged", [DQ Rows Flagged] )

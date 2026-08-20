@@ -1,0 +1,11 @@
+// P2 T6 -- Top at-risk terminals  [bar]
+// Ranked on decline rate over the reference window, with a 20-auth floor so a
+// terminal that declined its only transaction cannot take the top slot -- the
+// small-denominator trap that makes most "top N by rate" visuals meaningless.
+mv_terminal_activity_5min
+| where bucket_5min between (_startTime .. _endTime)
+| summarize auths = sum(auth_count), declines = sum(decline_count) by terminal_id
+| where auths >= 20
+| extend ['Decline rate'] = round(todouble(declines) / todouble(auths), 3)
+| top 10 by ['Decline rate'] desc
+| project terminal_id, ['Decline rate']

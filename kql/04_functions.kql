@@ -1,0 +1,282 @@
+// ============================================================================
+// Project 25 (Meridian Pay) -- Session 3, Phase 2
+// 04_functions.kql                        [REV 2 -- 2026-08-18]
+//
+// HOW TO RUN: paste the whole file, Select All, Run.
+//
+// Run AFTER 02_materialized_views.kql (reflexes 1, 3, 4 read the MVs).
+//
+// ---------------------------------------------------------------------------
+// REV 2 fixes three defects, two of which would have produced WRONG NUMBERS
+// rather than errors -- the dangerous kind:
+//
+// 1. DAY-OF-WEEK CONVENTION MISMATCH.  trading_calendar.py builds day_of_week
+//    from pandas .weekday(): 0=Monday ... 6=Sunday. Kusto's dayofweek() returns
+//    0=Sunday ... 6=Saturday. Rev 1 joined them directly, which silently shifts
+//    every store's trading hours by one day -- reflex 2 would have called
+//    in-hours activity "out of hours" and vice versa, and reflex 3 would have
+//    watched for dark terminals on the wrong day. Nothing would have errored.
+//    Converted once, in fn_store_open_sessions(), as (kusto_dow + 6) % 7.
+//
+// 2. open_time/close_time ARE STRINGS, and there are MULTIPLE SESSIONS PER DAY.
+//    Rev 1 treated them as timespans and assumed one row per (store, day).
+//    Restricted-F&B stores trade 11:00-15:00 AND 18:00-23:00 -- two rows. A
+//    single-row join would have declared the 15:00-18:00 gap "open". Also
+//    close_time can be the string "24:00", which totimespan() does not parse;
+//    handled explicitly as 1d.
+//
+// 3. now() vs SIM_NOW.  The generator's clock is synthetic and frozen at
+//    SIM_NOW = 2026-08-17T00:00:00Z. Any reflex anchored on the real now()
+//    reads an empty or increasingly wrong window as real time drifts past it --
+//    reflex 3 in particular would report EVERY terminal dark. Every
+//    time-relative function below therefore takes an `as_of` parameter,
+//    defaulting to null meaning "use now()". FOR BACKFILL DATA, PASS
+//    datetime(2026-08-17). Stated here because a reflex that returns 1,500
+//    dark terminals looks like a working detector having a bad day, not like a
+//    clock bug.
+// ---------------------------------------------------------------------------
+//
+// THE 12 COUNTED FUNCTIONS (contract Sec3 component 4). Counting note, since
+// this database will hold more than 12 functions: the 12 are the QUERYABLE
+// ones a dashboard, Activator rule or report calls. The update-policy
+// transforms (01_*.kql) and the dim_estate build/check helpers (03_*.kql) are
+// infrastructure and are not counted. fn_store_open_sessions below is also
+// infrastructure -- a shared helper, not a measure.
+//    1-4   fn_reflex1..fn_reflex4
+//    5-10  fn_dq_rule1..fn_dq_rule6
+//    11    fn_dispute_graded                 (created in 01b_dispute_curated_FIX.kql)
+//    12    fn_issuers_for_estate_selection   (created in 03_dim_estate_build.kql)
+//
+// fn_maturity_cohort below is NO LONGER one of the counted 12 -- demoted to a
+// helper on 2026-08-18 when fn_dispute_graded took over cohort tagging and
+// returns it alongside the row it describes. It stays created and usable, but
+// nothing calls it. Counted-function total is unchanged at 12; the swap is
+// recorded rather than left for a later recount to disagree about.
+// ============================================================================
+
+.execute database script with (ContinueOnErrors=false) <|
+//
+// ---- helper (NOT one of the 12): calendar normalisation ------------------
+// The single place the string->timespan conversion and the day-of-week
+// realignment are written down. Everything that needs trading hours calls
+// this; nothing re-derives it.
+.create-or-alter function fn_store_open_sessions() {
+    dim_store_calendar
+    | where is_closed == false
+    | where isnotempty(open_time) and isnotempty(close_time)
+    | extend open_ts = totimespan(open_time)
+    | extend close_ts = iff(close_time == '24:00', 1d, totimespan(close_time))
+    | project store_id, day_of_week, session_no, open_ts, close_ts
+}
+//
+// ---- 1. fn_reflex1_card_testing_burst ------------------------------------
+// >= min_low_value low-value (<MYR 5) auths on mostly-distinct tokens at one
+// terminal in a 5-minute bucket, with an elevated decline rate. Generator
+// injects 15-40 per episode at >60% declines; the defaults here sit UNDER
+// those so the detector has margin. Tuning them to the injection parameters
+// would make the detection circular -- it would prove only that we can find
+// what we planted, at the exact size we planted it.
+.create-or-alter function fn_reflex1_card_testing_burst(min_low_value: long = 10, min_decline_rate: real = 0.5) {
+    mv_terminal_activity_5min
+    | where low_value_count >= min_low_value
+    | where todouble(distinct_tokens) >= todouble(min_low_value) * 0.7
+    | extend decline_rate = todouble(decline_count) / todouble(max_of(auth_count, 1))
+    | where decline_rate >= min_decline_rate
+    | project terminal_id, store_id, merchant_id, bucket_5min, auth_count,
+              low_value_count, distinct_tokens, decline_rate
+}
+//
+// ---- 2. fn_reflex2_terminal_compromise -----------------------------------
+// tamper_flag AND outside EVERY open session that day AND a decline-rate step
+// change against the terminal's own trailing baseline.
+.create-or-alter function fn_reflex2_terminal_compromise(lookback_hours: int = 24, baseline_hours: int = 168, as_of: datetime = datetime(null), min_step: real = 0.15) {
+    let ref_time = iff(isnull(as_of), now(), as_of);
+    let win_start = ref_time - totimespan(lookback_hours * 1h);
+    let base_start = ref_time - totimespan(baseline_hours * 1h);
+    let tamper = telemetry_curated
+        | where tamper_flag == true
+        | where trusted_time between (win_start .. ref_time)
+        | extend gen_dow = (toint(dayofweek(trusted_time) / 1d) + 6) % 7
+        | extend tod = trusted_time - startofday(trusted_time);
+    let out_of_hours = tamper
+        | join kind=leftouter (fn_store_open_sessions())
+            on $left.store_id == $right.store_id, $left.gen_dow == $right.day_of_week
+        | summarize open_hits = countif(isnotnull(open_ts) and tod between (open_ts .. close_ts))
+            by telemetry_id, terminal_id, store_id, merchant_id, tamper_at = trusted_time
+        | where open_hits == 0;
+    let decline_now = auth_curated
+        | where event_type == 'auth'
+        | where trusted_time between (win_start .. ref_time)
+        | summarize now_declines = countif(auth_result == 'declined'), now_total = count() by terminal_id;
+    let decline_base = auth_curated
+        | where event_type == 'auth'
+        | where trusted_time between (base_start .. win_start)
+        | summarize base_declines = countif(auth_result == 'declined'), base_total = count() by terminal_id;
+    out_of_hours
+    | join kind=inner (decline_now) on terminal_id
+    | join kind=leftouter (decline_base) on terminal_id
+    | extend now_rate = todouble(now_declines) / todouble(max_of(now_total, 1))
+    | extend base_rate = todouble(coalesce(base_declines, 0)) / todouble(max_of(coalesce(base_total, 1), 1))
+    | where now_rate > base_rate + min_step
+    | project terminal_id, store_id, merchant_id, tamper_at, now_rate, base_rate,
+              step_change = now_rate - base_rate
+}
+//
+// ---- 3. fn_reflex3_terminal_dark -----------------------------------------
+// No heartbeat for >= dark_minutes while the store SHOULD be trading at
+// ref_time. Deliberately not a fraud signal -- contract Sec5: "what makes this
+// a product rather than a demo".
+.create-or-alter function fn_reflex3_terminal_dark(dark_minutes: int = 20, as_of: datetime = datetime(null)) {
+    let ref_time = iff(isnull(as_of), now(), as_of);
+    let gen_dow_now = (toint(dayofweek(ref_time) / 1d) + 6) % 7;
+    let tod_now = ref_time - startofday(ref_time);
+    let open_now = fn_store_open_sessions()
+        | where day_of_week == gen_dow_now
+        | where tod_now between (open_ts .. close_ts)
+        | distinct store_id;
+    mv_terminal_last_seen
+    | where store_id in (open_now)
+    | extend minutes_dark = datetime_diff('minute', ref_time, trusted_time)
+    | where minutes_dark >= dark_minutes
+    | project terminal_id, store_id, merchant_id, last_seen = trusted_time, minutes_dark
+}
+//
+// ---- 4. fn_reflex4_issuer_degradation ------------------------------------
+// Approval rate for one issuer BIN drops > sigma against ITS OWN baseline, via
+// series_decompose_anomalies -- not a fixed threshold. Exit criterion.
+.create-or-alter function fn_reflex4_issuer_degradation(lookback_days: int = 14, sigma: real = 2.5, as_of: datetime = datetime(null)) {
+    let ref_time = iff(isnull(as_of), now(), as_of);
+    let win_start = ref_time - totimespan(lookback_days * 1d);
+    mv_issuer_baseline
+    | where hour_bucket between (win_start .. ref_time)
+    | extend approval_rate = todouble(approved) / todouble(max_of(total, 1))
+    | make-series approval_series = avg(approval_rate) default = double(null)
+        on hour_bucket from win_start to ref_time step 1h by issuer_bin
+    | extend (anomalies, score, baseline) = series_decompose_anomalies(approval_series, sigma)
+    | mv-expand hour_bucket to typeof(datetime), approval_series to typeof(double),
+                anomalies to typeof(double), score to typeof(double), baseline to typeof(double)
+    | where anomalies == -1.0
+    | project issuer_bin, hour_bucket, approval_rate = approval_series, baseline, score
+}
+//
+// ---- 5. fn_dq_rule1_dedupe ------------------------------------------------
+// Duplicate auth_id rows in RAW -- i.e. what the update policy's dedupe had to
+// remove. Counted here, not on the cleaned table, because the cleaned table by
+// construction has none.
+.create-or-alter function fn_dq_rule1_dedupe() {
+    raw_auth_events
+    | summarize row_count = count() by auth_id
+    | where row_count > 1
+    | project auth_id, duplicate_rows = row_count - 1
+}
+//
+// ---- 6. fn_dq_rule2_out_of_order -----------------------------------------
+.create-or-alter function fn_dq_rule2_out_of_order() {
+    raw_auth_events
+    | where event_type in ('reversal', 'partial_capture')
+    | where isnotempty(related_auth_id)
+    | join kind=inner (
+        raw_auth_events
+        | where event_type == 'auth'
+        | summarize original_ingest_time = min(ingest_time), original_event_time = min(event_time) by auth_id
+        | project related_auth_id = auth_id, original_ingest_time, original_event_time
+      ) on related_auth_id
+    | where ingest_time < original_ingest_time
+    | project auth_id, related_auth_id, ingest_time, original_ingest_time,
+              event_time, original_event_time,
+              arrived_early_by = original_ingest_time - ingest_time
+}
+//
+// ---- 7. fn_dq_rule3_late_arrival -----------------------------------------
+// Rows whose ingest lags event by more than the ordinary skew envelope
+// (>15 min, matching auth_curated.is_late_arrival) -- a buffered dump, not
+// device clock drift.
+.create-or-alter function fn_dq_rule3_late_arrival() {
+    let late_auth = raw_auth_events
+        | extend lag_seconds = todouble(datetime_diff('second', ingest_time, event_time))
+        | where lag_seconds > 900.0
+        | project stream = 'auth_events', key_id = auth_id, terminal_id, event_time, ingest_time, lag_seconds;
+    let late_tel = raw_terminal_telemetry
+        | extend lag_seconds = todouble(datetime_diff('second', ingest_time, event_time))
+        | where lag_seconds > 900.0
+        | project stream = 'terminal_telemetry', key_id = telemetry_id, terminal_id, event_time, ingest_time, lag_seconds;
+    union late_auth, late_tel
+}
+//
+// ---- 8. fn_dq_rule4_clock_skew -------------------------------------------
+// Per-terminal skew distribution, read off the curated tables' own computed
+// column -- proves the correction genuinely varies terminal to terminal rather
+// than being a constant the pipeline invented.
+.create-or-alter function fn_dq_rule4_clock_skew() {
+    union
+        (auth_curated | project terminal_id, clock_skew_seconds),
+        (telemetry_curated | project terminal_id, clock_skew_seconds)
+    | summarize avg_skew_seconds = avg(clock_skew_seconds),
+                min_skew_seconds = min(clock_skew_seconds),
+                max_skew_seconds = max(clock_skew_seconds),
+                sample_count = count()
+        by terminal_id
+    | where avg_skew_seconds != 0.0
+}
+//
+// ---- 9. fn_dq_rule5_schema_evolution -------------------------------------
+// Rows either side of the cutover. The floor: a result containing only
+// schema_version=2 (or only =1) means the cutover was NOT captured -- that is
+// a failure, not a clean bill of health.
+.create-or-alter function fn_dq_rule5_schema_evolution() {
+    raw_auth_events
+    | summarize row_count = count(),
+                min_event_time = min(event_time),
+                max_event_time = max(event_time),
+                sca_populated = countif(isnotnull(sca_flag))
+        by schema_version
+    | order by schema_version asc
+}
+//
+// ---- 10. fn_dq_rule6_hot_cold_reconciliation -----------------------------
+// Row count AND summed amount, per stream, hot vs cold -- the contract's
+// explicit wording. Telemetry has no amount, so its amount gap is reported as
+// null rather than a misleading 0.
+.create-or-alter function fn_dq_rule6_hot_cold_reconciliation() {
+    let auth_cmp = (
+        (raw_auth_events | summarize hot_rows = count(), hot_amount = sum(amount) | extend stream = 'auth_events')
+        | join kind=inner (
+            raw_auth_events_cold | summarize cold_rows = count(), cold_amount = sum(amount) | extend stream = 'auth_events'
+          ) on stream
+    );
+    let tel_cmp = (
+        (raw_terminal_telemetry | summarize hot_rows = count() | extend stream = 'terminal_telemetry', hot_amount = real(null))
+        | join kind=inner (
+            raw_terminal_telemetry_cold | summarize cold_rows = count() | extend stream = 'terminal_telemetry', cold_amount = real(null)
+          ) on stream
+    );
+    union auth_cmp, tel_cmp
+    | extend row_gap = hot_rows - cold_rows, amount_gap = hot_amount - cold_amount
+    | project stream, hot_rows, cold_rows, row_gap, hot_amount, cold_amount, amount_gap
+}
+//
+// ---- helper (NOT one of the 12 since 2026-08-18): fn_maturity_cohort -----
+// Scalar cohort bucketing for a single timestamp. Superseded for reporting by
+// fn_dispute_graded (01b_dispute_curated_FIX.kql), which returns cohort_now
+// alongside each dispute row. Kept because it is a cheap way to sanity-check
+// the bucket boundaries in isolation.
+.create-or-alter function fn_maturity_cohort(auth_event_time: datetime, as_of: datetime = datetime(null)) {
+    let ref_time = iff(isnull(as_of), now(), as_of);
+    let age_days = datetime_diff('day', ref_time, auth_event_time);
+    print cohort = case(
+        age_days >= 60, 'graded_T90_T60',
+        age_days >= 30, 'partially_matured_T60_T30',
+        'awaiting_grading_T30_T')
+}
+
+// ============================================================================
+// 12. fn_issuers_for_estate_selection lives in 03_dim_estate_build.kql and is
+// NOT redefined here -- one source of truth per function. Listed in this
+// file's header only so all 12 are documented in one place.
+//
+// Smoke test after the backfill lands (run each separately, and pass as_of):
+//   fn_reflex1_card_testing_burst() | count
+//   fn_reflex3_terminal_dark(20, datetime(2026-08-17)) | count
+//   fn_reflex4_issuer_degradation(14, 2.5, datetime(2026-08-17)) | count
+//   fn_store_open_sessions() | summarize by store_id | count      // expect 927
+// ============================================================================

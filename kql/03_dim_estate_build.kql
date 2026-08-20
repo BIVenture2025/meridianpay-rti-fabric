@@ -1,0 +1,99 @@
+// ============================================================================
+// Project 25 (Meridian Pay) -- Session 3, Phase 2
+// 03_dim_estate_build.kql                 [REV 2 -- 2026-08-18]
+//
+// Curated table 4: dim_estate -- the KQL table + Power BI decomposition tree
+// that replaced Digital Twin Builder after gate C1 failed (Rev 3). The direct
+// deliverable of the kill criterion, not a fallback bolted on afterwards.
+//
+// HOW TO RUN: paste the whole file, Select All, Run -- that executes the
+// .execute database script block (table + functions). THEN run the
+// .set-or-replace at the bottom SEPARATELY: it is a data command and cannot
+// live inside a database script.
+//
+// REV 2 correction, material: Rev 1 gave dim_estate a store_archetype column.
+// THE GENERATOR NEVER PERSISTS ARCHETYPE. schemas.py's DIM_STORE_SCHEMA is
+// (store_id, merchant_id) only, and trading_calendar.py keeps archetype in an
+// in-memory pandas Series that is written to no table -- not to dim_store, not
+// to dim_store_calendar. So the column is dropped here. Nothing downstream
+// needs it: reflexes 2 and 3 read the calendar's actual open/close sessions,
+// which is strictly better than reading an archetype label and re-deriving the
+// hours from it. Recorded rather than silently patched, because "the spec said
+// a column exists and the generator disagrees" is exactly the class of defect
+// the spec reconciliation gate exists to catch.
+//
+// Architecture decision (also in 00_*.kql): dim_estate ships as ONE
+// denormalized table, one row per terminal, carrying its store and merchant.
+// dim_issuer stays separate and is resolved per-transaction, per
+// GENERATOR_SPEC.md Sec2's own note that an issuer is not structurally owned
+// by a terminal.
+// ============================================================================
+
+.execute database script with (ContinueOnErrors=false) <|
+//
+.create-merge table dim_estate (
+    terminal_id: string,
+    store_id: string,
+    merchant_id: string,
+    merchant_tier: string,
+    mcc: string,
+    mcc_description: string
+)
+//
+// stg_dim_terminal already carries its resolved store_id AND merchant_id
+// (denormalized at generation time -- GENERATOR_SPEC.md Sec2), so merchant
+// attributes join straight off the terminal row. The join to stg_dim_store is
+// still an inner join and still load-bearing: it is what makes an orphan
+// terminal (a terminal whose store does not exist) fail to appear in
+// dim_estate, which is what the zero-orphan check below then detects.
+.create-or-alter function fn_build_dim_estate() {
+    stg_dim_terminal
+    | join kind=inner (stg_dim_store | project store_id) on store_id
+    | join kind=inner (stg_dim_merchant) on merchant_id
+    | project terminal_id, store_id, merchant_id, merchant_tier, mcc, mcc_description
+}
+//
+// ---- Exit criterion: zero orphan terminals -------------------------------
+// "dim_estate resolves every alert to a merchant and store; zero orphan
+// terminals" (OUTCOME_CONTRACT.md Sec7). Structurally this should be
+// impossible given the generator's build order, so this proves a negative the
+// generator already guarantees -- which is the point: it is a check that can
+// only fail if an assumption broke, e.g. a partial ingest.
+.create-or-alter function fn_check_zero_orphan_terminals() {
+    stg_dim_terminal
+    | join kind=leftouter (dim_estate | project terminal_id, resolved = 1) on terminal_id
+    | where isnull(resolved)
+    | project terminal_id, store_id, merchant_id
+}
+//
+// ---- Decomposition tree, 4th level: issuer -------------------------------
+// The tree walks Merchant -> Store -> Terminal from dim_estate, then "Issuer of
+// the selected transactions" -- resolved by joining auth_curated.issuer_bin to
+// stg_dim_issuer at query time, scoped to the terminals currently selected.
+// Power BI supplies that filter context; this function takes it as an array.
+.create-or-alter function fn_issuers_for_estate_selection(terminal_ids: dynamic) {
+    auth_curated
+    | where terminal_id in (terminal_ids)
+    | where event_type == 'auth'
+    | join kind=inner (stg_dim_issuer) on issuer_bin
+    | summarize txn_count = count(), approved = countif(auth_result == 'approved')
+        by issuer_bin, issuer_name
+    | extend approval_rate = todouble(approved) / todouble(max_of(txn_count, 1))
+}
+
+// ============================================================================
+// RUN THESE TWO SEPARATELY, and only AFTER the backfill has landed the three
+// stg_dim_* tables (a data command cannot sit inside .execute database script):
+//
+//   .set-or-replace dim_estate <| fn_build_dim_estate()
+//
+//   fn_check_zero_orphan_terminals() | count
+//
+// The second MUST return 0. Full rebuild rather than append is deliberate:
+// dim_estate is 1,500 rows of reference data, so a from-scratch replace cannot
+// double-count on a re-run, which an append could.
+//
+// Running the rebuild before the staging tables are populated returns 0 rows
+// and is harmless -- but then the orphan check returns 1,500, not 0. That is a
+// race, not a real orphan. Confirm stg_dim_terminal | count == 1500 first.
+// ============================================================================

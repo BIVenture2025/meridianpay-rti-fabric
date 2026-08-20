@@ -1,0 +1,9 @@
+// P2 T4 -- Reflex 2 firings  [stat]
+// Same source and same window convention as reflex 1's tile.
+// Expect a small number: the 10 persisted terminal_compromise rows come from one
+// episode retried with lookback_hours tuned to its own duration. That is
+// documented in Gate_Check_Results.md, not a defect in this tile.
+alerts_v2
+| where reflex_type == 'terminal_compromise'
+| where window_start between (_startTime .. _endTime)
+| summarize Value = count()

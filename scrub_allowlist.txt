@@ -1,0 +1,11 @@
+# scrub_check.py allowlist -- Project 25
+#
+# DELIBERATELY SHORT. A finding that does not apply gets a NAMED CLASS that is counted and
+# printed (TEMPLATE), never an allowlist entry that makes it vanish. This file exists for the
+# one case that is neither: a contact address published on purpose.
+#
+# Everything else that scrub_check reports in this repository is classified TEMPLATE by the
+# tool itself and is reported rather than suppressed.
+
+# the sign-off in README.md, published intentionally
+waisonyeong@gmail.com

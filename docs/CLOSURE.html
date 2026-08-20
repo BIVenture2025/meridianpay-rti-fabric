@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project 25 — Closure Analysis</title>
+<style>
+  :root{
+    --bg:#0e1420; --panel:#161d2b; --panel2:#1c2534; --line:#2a3547;
+    --ink:#e8edf5; --ink2:#9aa8bd; --ink3:#6b7a91;
+    --new:#2dd4bf; --keep:#5b8def; --risk:#f5a524; --stop:#f2555a;
+    --r:10px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;}
+  .wrap{max-width:1240px;margin:0 auto;padding:34px 22px 70px}
+  header h1{font-size:27px;margin:0 0 6px;letter-spacing:-.4px}
+  header .sub{color:var(--ink2);font-size:14.5px;margin:0 0 4px}
+  header .meta{color:var(--ink3);font-size:12.5px;font-variant-numeric:tabular-nums}
+  .pitch{margin:22px 0 26px;padding:16px 18px;background:var(--panel);
+         border:1px solid var(--line);border-left:3px solid var(--new);border-radius:var(--r);
+         color:var(--ink);font-size:15px}
+  .pitch b{color:var(--new);font-weight:600}
+
+  nav{display:flex;gap:6px;margin:0 0 22px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  nav button{background:none;border:0;color:var(--ink3);font:inherit;font-size:14px;
+             padding:10px 15px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+  nav button:hover{color:var(--ink2)}
+  nav button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--new)}
+  section[hidden]{display:none}
+
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin:0 0 18px;font-size:12.5px;color:var(--ink2)}
+  .legend span{display:flex;align-items:center;gap:7px}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+
+  .layer{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+         padding:14px 16px;margin:0 0 10px}
+  .layer > h3{margin:0 0 3px;font-size:13px;letter-spacing:.9px;text-transform:uppercase;
+         color:var(--ink2);font-weight:600}
+  .layer > p.note{margin:0 0 12px;font-size:13px;color:var(--ink3)}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  .card{flex:1 1 190px;background:var(--panel2);border:1px solid var(--line);
+        border-radius:8px;padding:11px 13px;position:relative;min-width:180px}
+  .card.new{border-color:rgba(45,212,191,.45)}
+  .card.new::after{content:"NEW";position:absolute;top:9px;right:10px;font-size:9.5px;
+        letter-spacing:.7px;color:var(--new);font-weight:700}
+  .card.risk{border-color:rgba(245,165,36,.45)}
+  .card.risk::after{content:"AT RISK";position:absolute;top:9px;right:10px;font-size:9.5px;
+        letter-spacing:.7px;color:var(--risk);font-weight:700}
+  .card.killed{border-color:rgba(242,85,90,.45);opacity:.72}
+  .card.killed::after{content:"KILLED";position:absolute;top:9px;right:10px;font-size:9.5px;
+        letter-spacing:.7px;color:var(--stop);font-weight:700}
+  .card.killed h4{text-decoration:line-through;text-decoration-color:var(--stop)}
+  /* overflow-wrap is load-bearing: a long single-word heading (an API name) otherwise
+     collides with the absolutely-positioned badge. Caught by render check, P25 2026-08-17. */
+  .card h4{margin:0 0 4px;font-size:14px;font-weight:600;padding-right:56px;overflow-wrap:anywhere}
+  .card p{margin:0;font-size:12.5px;color:var(--ink2);line-height:1.45}
+  .card code{font-size:11.5px;color:var(--ink3);background:rgba(255,255,255,.04);
+        padding:1px 4px;border-radius:3px}
+  .arrow{text-align:center;color:var(--ink3);font-size:17px;line-height:1;margin:2px 0 8px;
+        letter-spacing:2px}
+  .loop{background:linear-gradient(90deg,rgba(45,212,191,.10),rgba(45,212,191,.02));
+        border:1px dashed rgba(45,212,191,.45);border-radius:var(--r);padding:12px 16px;
+        margin:10px 0 12px;font-size:13.5px;color:var(--ink)}
+  .loop b{color:var(--new)}
+  .stopbox{background:linear-gradient(90deg,rgba(242,85,90,.10),rgba(242,85,90,.02));
+        border:1px dashed rgba(242,85,90,.45);border-radius:var(--r);padding:12px 16px;
+        margin:10px 0 18px;font-size:13.5px;color:var(--ink)}
+  .stopbox b{color:var(--stop)}
+
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:0 0 20px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--ink2);font-size:11.5px;text-transform:uppercase;letter-spacing:.7px;font-weight:600}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  tr.hi td{background:rgba(45,212,191,.07)}
+  tr.dead td{background:rgba(242,85,90,.07)}
+  .tag{display:inline-block;font-size:10.5px;letter-spacing:.5px;font-weight:700;
+       padding:2px 7px;border-radius:20px;white-space:nowrap}
+  .t-new{background:rgba(45,212,191,.14);color:var(--new)}
+  .t-keep{background:rgba(91,141,239,.14);color:var(--keep)}
+  .t-risk{background:rgba(245,165,36,.14);color:var(--risk)}
+  .t-stop{background:rgba(242,85,90,.14);color:var(--stop)}
+
+  h2.sec{font-size:17px;margin:26px 0 10px;font-weight:600}
+  h2.sec:first-child{margin-top:4px}
+  p.lead{color:var(--ink2);font-size:14px;margin:0 0 16px;max-width:78ch}
+  .caveat{border-left:3px solid var(--risk);background:rgba(245,165,36,.06);
+          padding:11px 14px;border-radius:6px;margin:0 0 20px;font-size:13.5px;color:var(--ink2)}
+  .caveat b{color:var(--risk)}
+
+  .kpis{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 22px}
+  .kpi{flex:1 1 150px;background:var(--panel);border:1px solid var(--line);
+       border-radius:var(--r);padding:13px 15px;min-width:145px}
+  .kpi .v{font-size:23px;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.5px}
+  .kpi .l{font-size:11.5px;color:var(--ink3);margin-top:3px;line-height:1.35}
+  .kpi.accent .v{color:var(--new)}
+  .kpi.stop .v{color:var(--stop)}
+
+  .phases{position:relative;padding-left:26px}
+  .phases::before{content:"";position:absolute;left:7px;top:8px;bottom:8px;width:2px;
+       background:var(--line)}
+  .ph{position:relative;margin:0 0 14px;background:var(--panel);border:1px solid var(--line);
+      border-radius:var(--r);padding:12px 15px}
+  .ph::before{content:"";position:absolute;left:-24px;top:19px;width:11px;height:11px;
+      border-radius:50%;background:var(--panel);border:2px solid var(--line)}
+  .ph.now::before{background:var(--new);border-color:var(--new)}
+  .ph.now{border-color:rgba(45,212,191,.45)}
+  .ph.done{border-color:rgba(45,212,191,.28)}
+  .ph.done::before{background:var(--new);border-color:var(--new)}
+  .ph .hd{display:flex;justify-content:space-between;gap:12px;align-items:baseline;flex-wrap:wrap}
+  .ph h4{margin:0;font-size:14.5px;font-weight:600}
+  .ph .sess{font-size:11.5px;color:var(--ink3);white-space:nowrap}
+  .ph p{margin:5px 0 0;font-size:13px;color:var(--ink2)}
+  .ph .status{margin:5px 0 0;font-size:12.5px;color:var(--ink2)}
+  .ph .status .chk{color:var(--new);font-weight:700;margin-right:4px}
+  .ph .gate{margin-top:7px;font-size:12.5px;color:var(--ink3);border-top:1px solid var(--line);
+      padding-top:7px}
+  .ph .gate b{color:var(--ink2);font-weight:600}
+  .ph .cap{font-size:10.5px;letter-spacing:.5px;font-weight:700;padding:2px 7px;border-radius:20px;
+      background:rgba(245,165,36,.14);color:var(--risk);white-space:nowrap;margin-left:8px}
+  .ph .cap.free{background:rgba(91,141,239,.14);color:var(--keep)}
+  p.meta.status-now{color:var(--new);margin-top:4px;font-weight:500}
+
+  footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);
+         color:var(--ink3);font-size:12px}
+  @media(max-width:640px){ .card{flex:1 1 100%} .kpi{flex:1 1 45%} }
+
+  :root{
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+    --good:#0ca30c; --warn:#fab219; --serious:#ec835a; --crit:#d03b3b;
+    --grid:#2c2c2a; --axis:#383835; --muted:#898781;
+  }
+  .tiles{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 20px}
+  .tile{flex:1 1 165px;min-width:155px;background:var(--panel);border:1px solid var(--line);
+        border-radius:var(--r);padding:13px 15px}
+  .tile .k{font-size:11.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--ink3);
+        margin:0 0 6px;font-weight:600}
+  .tile .v{font-size:26px;font-weight:600;letter-spacing:-.6px;line-height:1.15}
+  .tile .n{font-size:12px;color:var(--ink2);margin-top:5px;line-height:1.4;overflow-wrap:anywhere}
+  /* A long filename in a KPI note otherwise runs straight out of the tile — caught by the
+     headless render check, P25 2026-08-19. Same class as .card h4's overflow-wrap. */
+  .tile code,td code,figcaption code{overflow-wrap:anywhere}
+  .tile.hero{flex:1 1 100%;background:linear-gradient(90deg,rgba(45,212,191,.10),rgba(45,212,191,.02));
+        border-color:rgba(45,212,191,.4)}
+  .tile.hero .v{font-size:38px;color:var(--new)}
+  .v.good{color:var(--good)} .v.warn{color:var(--warn)} .v.crit{color:var(--crit)}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+        padding:16px 18px;margin:0 0 18px}
+  .panel h4{margin:0 0 4px;font-size:13px;letter-spacing:.9px;text-transform:uppercase;
+        color:var(--ink2);font-weight:600}
+  .basis{font-size:12px;color:var(--ink3);margin:6px 0 0;font-style:italic}
+  .warnbox{margin:18px 0 24px;padding:15px 18px;background:rgba(245,165,36,.07);
+        border:1px solid rgba(245,165,36,.35);border-left:3px solid var(--risk);
+        border-radius:var(--r);font-size:14.5px}
+  .warnbox b{color:var(--risk)}
+  figure{margin:0 0 22px;background:var(--panel);border:1px solid var(--line);
+        border-radius:var(--r);padding:16px 18px}
+  figure h4{margin:0 0 2px;font-size:14.5px;color:var(--ink);text-transform:none;letter-spacing:0}
+  figure .sub{font-size:12.5px;color:var(--ink2);margin:0 0 14px}
+  figcaption{font-size:12.5px;color:var(--ink3);margin-top:10px;line-height:1.5}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin:0 0 12px;font-size:12.5px;color:var(--ink2)}
+  .legend span{display:flex;align-items:center;gap:7px}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+  svg text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+  tr.hi td{background:rgba(45,212,191,.07)}
+  tr.bad td{background:rgba(208,59,59,.07)}
+  .t-ok{background:rgba(12,163,12,.16);color:var(--good)}
+  .t-diff{background:rgba(250,178,25,.14);color:var(--warn)}
+  .t-no{background:rgba(208,59,59,.16);color:var(--crit)}
+  .t-un{background:rgba(154,168,189,.14);color:var(--ink2)}
+  .t-new{background:rgba(45,212,191,.14);color:var(--new)}
+  .tt{position:fixed;pointer-events:none;background:#0a0f18;border:1px solid var(--line);
+      border-radius:7px;padding:7px 10px;font-size:12.5px;color:var(--ink);opacity:0;
+      transition:opacity .1s;z-index:50;box-shadow:0 6px 20px rgba(0,0,0,.5);max-width:280px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Project 25 — Closure Analysis</h1>
+  <p class="sub">Meridian Pay · Fabric End-to-End Real-Time Payments Risk · SE-Asia card acquirer · Type D platform build · workspace <code>Real-Time Payment Risk</code></p>
+  <p class="meta">Phases 0–7 · 8 sessions · 2026-08-17 → 2026-08-19 · trial capacity lapses ~2026-09-09 · compiled Session 7, Phase 6 (Skill 10) · Phase 7 tab added Session 8, 2026-08-19</p>
+  <p class="meta status-now">Built and verified end to end; <b>closure complete, publishing outstanding</b>. 10 of 11 non-negotiable components delivered — component 1, Eventstream ×2, was never built and is recorded DEGRADED rather than reinterpreted.</p>
+</header>
+
+<div class="pitch">A regional card acquirer runs 1,500 payment terminals across 600 merchants. Fraud was caught by a nightly batch and a dead terminal by the merchant phoning in. This build puts both on one event stream — 29,158,765 events in an Eventhouse, four reflexes firing on patterns instead of schedules, a Direct Lake model with <b>no Gold notebook underneath it</b> — and then, when the chargebacks arrive 30 to 60 days later, <b>grades every alert it raised and publishes its own precision, by cohort, never blended.</b></div>
+
+<nav role="tablist">
+  <button role="tab" aria-selected="true" data-t="t0">Verdict</button>
+  <button role="tab" aria-selected="false" data-t="t1">C1 · Post-mortem</button>
+  <button role="tab" aria-selected="false" data-t="t2">C2 · Plan vs actual</button>
+  <button role="tab" aria-selected="false" data-t="t3">C3 · vs Project 24</button>
+  <button role="tab" aria-selected="false" data-t="t5">C5 · Do better</button>
+  <button role="tab" aria-selected="false" data-t="t6">C6 · Assumption tested</button>
+  <button role="tab" aria-selected="false" data-t="t8">C8 · Cost</button>
+  <button role="tab" aria-selected="false" data-t="t9">Evidence</button>
+  <button role="tab" aria-selected="false" data-t="t10">Phase 7 · Publishing</button>
+</nav>
+
+<!-- VERDICT -->
+<section id="t0">
+<h2 class="sec">The verdict in six numbers</h2><div class="tiles"><div class="tile hero"><p class="k">Components delivered</p><div class="v">10 / 11</div><p class="n">Eventstream ×2 never built — recorded DEGRADED, not reinterpreted.<br><span style='color:var(--ink3)'>Basis: workspace item list, unfiltered, read three times on two days</span></p></div><div class="tile"><p class="k">Rows through the pipeline</p><div class="v">29,158,765</div><p class="n">Sum of 20 per-table KQL counts.<br><span style='color:var(--ink3)'>Basis: E3 read-back §2 — the record's “29.2M” rounded, never previously shown</span></p></div><div class="tile"><p class="k">Tables read two-sided</p><div class="v good">7 / 20</div><p class="n">Delta 0 on every one. The other 13 are single-sided and reconciled by derivation.<br><span style='color:var(--ink3)'>Basis: KQL vs Delta-over-XMLA — different engine, different storage layer</span></p></div><div class="tile"><p class="k">Validator errors, first pass</p><div class="v warn">26 → 0</div><p class="n">Against a target of 0 first pass. All 26 real; <b>24 were one block of invented <code>matrix</code> property names</b>.<br><span style='color:var(--ink3)'>Basis: Session 6 gate entry</span></p></div><div class="tile"><p class="k">Reflex 3 precision</p><div class="v">0.163</div><p class="n">Recall 60/60. Shifted-window control returned <b>0</b> before any number went on a page.<br><span style='color:var(--ink3)'>Basis: <code>15_reflex3_timetravel_grading.kql</code></span></p></div><div class="tile"><p class="k">Browser share of tool calls</p><div class="v crit">17%</div><p class="n">Against a ≤10% target. Over, and recorded over.<br><span style='color:var(--ink3)'>Basis: <code>_cost/*.json</code> tool_mix, 5 of 7 sessions</span></p></div></div><div class="warnbox"><b>Read this before any number on this page.</b> Two of the seven sessions' cost snapshots are <b>lost and unrecoverable</b>, and Session 7's is a compaction fragment. Every total in the Cost tab is a <b>floor</b>, marked as one by the tool that produced it. Separately, three claims on this page were first written from a linter run that had walked nothing — see <b>Post-mortem §7</b>. Both are recorded rather than repaired away.</div><h2 class="sec">What the project proved, and what it did not</h2><table>
+<thead><tr><th></th><th>Proved</th><th>Basis</th></tr></thead>
+<tbody>
+<tr><td><b>A transformation layer with no notebooks</b></td><td>3 KQL update policies + 3 materialized views replace Bronze/Silver/Gold entirely</td><td>3 policies <code>IsEnabled</code>, 3 MVs <code>IsHealthy</code>, verified by query</td></tr>
+<tr><td><b>Direct Lake with no Gold layer beneath it</b></td><td>Semantic model reads the Eventhouse's own OneLake availability through Lakehouse shortcuts</td><td>Gate C2 PASSED; <code>EVALUATE dim_estate</code> → 1,500 rows</td></tr>
+<tr><td><b>A platform that grades its own alerts</b></td><td>Precision and recall per maturity cohort, never blended, structurally enforced</td><td>The two <em>unguarded</em> precision measures are bound by <b>zero</b> visuals — checked by a lint rule, not by review</td></tr>
+<tr><td><b>One Spark notebook</b></td><td>Against a ≤2 anti-drift budget, in an engine whose every instinct pushes toward three</td><td><code>01_Source/NB_P25_Backfill_Ingest.ipynb</code>, the only one</td></tr>
+</tbody></table><h3 style="color:var(--risk)">And what it did not</h3><table>
+<thead><tr><th></th><th>Not proved</th><th>Recorded as</th></tr></thead>
+<tbody>
+<tr><td><b>Eventstreams</b></td><td>Zero exist and none ever did. §7's “2 mandatory Eventstreams live, evidenced by query” is <b>NOT MET</b></td><td>DEGRADED — decision taken by the user, 2026-08-19</td></tr>
+<tr><td><b>Both producer routes</b></td><td>The Spark backfill is proven end to end; live replay has code and no stream to replay into</td><td>PARTIALLY MET</td></tr>
+<tr><td><b>Reflex 2's precision</b></td><td>1.000, from grading a reflex against the episode its own evidence was constructed from</td><td>Circular — and the Alert Precision page must not render it as a measurement</td></tr>
+<tr><td><b>The literal <code>.export</code></b></td><td>Only the Delta-mirror half of §4 was performed</td><td>Deviation, with its residual risk named: if the Eventhouse is deleted, the mirror goes with it</td></tr>
+</tbody></table><figure><h4>Cache-read per turn, by session</h4><p class="sub">The scale-free quantity the split-session hypothesis says should stay flat. Sessions 4 and 5 are drawn as gaps because their snapshots are gone — not as zero, and not omitted.</p><div id="c-cost"></div><figcaption><b>Basis:</b> <code>_cost/session-NN.json</code>, merged by <code>capture_session_cost.py</code>. Project 23's single session averaged <b>478,216</b> — the dashed line. Session 3 is the excursion and it is the <em>longest</em> session, not the latest: if context compounded across sessions, 6 and 7 would be the expensive ones. They are not. <b>Five points with two holes is a shape, not a test</b>, and the model routing that would confound it is not even recorded in the snapshots.</figcaption></figure>
+</section>
+
+<!-- C1 · POST-MORTEM -->
+<section id="t1" hidden>
+<h2 class="sec">C1 · Stage-by-stage post-mortem</h2><p class="lead">Full table with per-phase hiccup, learning and pivot in <code>C1_Post_Mortem.md</code>. What follows is the part the per-phase table cannot show.</p><figure><h4>Delayed detonation — where a defect was planted, and where it fired</h4><p class="sub">Nine build defects. Each line runs from the phase that planted it to the phase it first detonated in; where they coincide the defect fired where it was made.</p><div class="legend"><span><span class="dot" style="background:none;border:2.5px solid var(--s3);width:12px;height:12px"></span>Planted</span><span><span class="dot" style="background:var(--s2)"></span>First detonation</span><span style="color:var(--ink3)">— a filled dot alone means it fired where it was made</span></div><div id="c-detonate"></div><figcaption><b>Basis:</b> <code>Gate_Check_Results.md</code> session headers and the correction blocks, enumerated in C1 §2.1. <b>Mean first-detonation gap 1.7 phases; longest 4</b> — the two Eventstreams, charted in Phase 1 and found in Phase 5. <b>Six of the nine were assertions that were never counted</b>: a gate assumed testable, a component assumed built, a shortcut set assumed sufficient, a table assumed unreferenced, a tool assumed absent. None was a coding error.</figcaption></figure><div class="panel"><h4>The generalisable shape</h4><p>Every one of the six would have been caught by <b>enumerating the thing instead of remembering it</b>. The project's own fix — the spec reconciliation gate's new fifth clause, <em>every session, count the workspace items against contract §3</em> — is aimed exactly there, and is now in <code>CLAUDE.md</code> as a standing rule.</p><p class="basis">The Eventstream gap survived a <b>closed export checkpoint</b> whose own closure note named the streams among its satisfied pieces. The clause was withdrawn in place rather than edited away, because a closed checkpoint that quietly rewrites itself teaches nothing.</p></div><figure><h4>Correction chains — a correction that corrected an earlier correction</h4><p class="sub">Project 24 recorded four. Project 25 has ten, and the two longest are the two that cost the most.</p><div id="c-chains"></div><figcaption><b>Basis:</b> C1 §2.2, each step cited to a line in the gate file. <b>Four of the ten are reversals</b> — a conclusion stated, then contradicted by the same author. In every case the second reading was right and what overturned it was <b>a second measurement, not more thinking</b>. The mirror chain alone cost two sessions.</figcaption></figure><div class="panel"><h4>The one that nearly went wrong</h4><p>The Session-7 runbook asserted <b>in bold</b> that the Lakehouse shortcut pointed at <code>alerts</code>, and instructed <code>.drop table alerts_v2</code>. The verification read insisted on immediately before it showed the target was <code>…/Tables/alerts_v2</code> — the opposite. <b>The 30-second check in front of the destructive command is the only reason the live data path survived.</b></p><p class="basis">Third wrong expectation of that session. All three were confident, all three were written down, and all three were caught by a read rather than by review. The lesson is not “be more careful” — it is that a destructive step needs a read in front of it whose result can contradict the step.</p></div><div class="panel"><h4>Two findings this document produced about itself</h4><p><b>1.</b> A claim that <em>“9/9 controls”</em> was arithmetically impossible — read off a summary table instead of off the harness, which names all nine with their floors. <b>2.</b> The bigger one: <code>validate_pbip.py</code> pointed <em>at</em> a <code>.Report</code> folder printed <b>0 errors, 0 warnings having checked nothing</b>, and three claims on this page were written from such a run. Correctly invoked the same report reads <b>0 errors, 1 warning</b>.</p><p class="basis">Guide §104's exact shape — a check that never ran, reporting nothing rather than reporting that it could not run — committed inside the closure documents about guide §104. Fixed with a scan floor that exits 3; frozen at <code>_controls/lint_scan_floor.txt</code>.</p></div>
+</section>
+
+<!-- C2 · PLAN VS ACTUAL -->
+<section id="t2" hidden>
+<h2 class="sec">C2 · Plan vs actual</h2><p class="lead">Every contracted outcome classified in <code>C2_Plan_vs_Actual.md</code>. The drift that matters is below.</p><table>
+<thead><tr><th>Committed</th><th>Target</th><th>Actual</th><th></th><th>Note</th></tr></thead>
+<tbody>
+<tr><td>Eventstreams</td><td>2 / 3</td><td><b>0</b></td><td><span class="tag t-no">NOT DELIVERED</span></td><td>Not on the drop list — only the third, job-events stream was droppable</td></tr>
+<tr><td>KQL tables</td><td>12</td><td>20</td><td><span class="tag t-diff">DIFFERENT</span></td><td>12 counted + 8 working, itemised. The runbook's “returns it to exactly 12” was wrong</td></tr>
+<tr><td>KQL functions</td><td>12</td><td>12 counted, <b>24 on disk</b></td><td><span class="tag t-diff">DIFFERENT</span></td><td>The membership of “the 12” was redefined three times, each redefinition documented</td></tr>
+<tr><td>DAX measures</td><td>12 / 20</td><td>24 loaded + read back</td><td><span class="tag t-ok">DELIVERED</span></td><td>One XMLA transaction, 0.7 s, format strings carried by TOM</td></tr>
+<tr><td>Report pages</td><td>2 / 4</td><td>5</td><td><span class="tag t-new">OVER</span></td><td>4 contract pages + the mandatory guide page. Drop list not needed</td></tr>
+<tr><td>Spark notebooks</td><td>≤ 2</td><td><b>1</b></td><td><span class="tag t-ok">HELD</span></td><td>The anti-drift number, and the one target this project beat outright</td></tr>
+<tr><td>Sessions</td><td>8</td><td>7 run, Phase 7 pending</td><td><span class="tag t-un">IN PROGRESS</span></td><td>On plan at best, with zero slack — the E3 slip spent it</td></tr>
+</tbody></table><div class="panel"><h4>The theme deviation, unrecorded until closure</h4><p>§0 and §7 both commit to <em>“theme <code>MyLifeInLegoBricks_Theme.json</code> … no new theme JSON.”</em> The delivered report names <code>My_Life,_In_LEGO_Bricks___Japa9164530027503082.json</code> and carries an injected <code>Fluent2-CY26SU07</code> base theme. Neither string appears in any project document.</p><p><b>Measured rather than assumed:</b> the registered file is the <em>same</em> theme — its <code>name</code> field still reads “My Life, In LEGO Bricks — Japanese Indigo (Bright)” — re-registered under a mangled filename by Power BI Desktop when the user re-applied it. <b>No new theme was authored, so the clause is satisfied in substance and violated in the letter.</b></p><p class="basis">That re-apply is also why the report renders. The embedded theme's wildcard still forces <code>title</code> and <code>visualHeader</code> onto every visual, and now carries the <code>cardVisual</code> override Session 7 added to all 37 engine themes — making the delivered report a live false-positive control for the new <code>THEME_BLANKS_CARDVISUAL</code> rule.</p></div><div class="panel"><h4>Two drop-list items were dropped in silence — §8's own prohibition</h4><p>§3's rule is quoted throughout this project: <em>“the drop list is expected to be used, and using it is not a failure. <b>Silently not using it is.</b>”</em> Three of five items were recorded properly. The <b>Map</b> and the <b>deployment pipeline</b> were not mentioned again after Phase 0.</p><p>Both are recorded as dropped here: the Map is part of no export checkpoint's minimum content, and the deployment pipeline needs a second workspace this trial capacity does not have — §3's own rationale, <em>“Git integration alone carries the ALM story”</em>, is satisfied by component 11.</p><p class="basis">Neither is an architectural loss. <b>The failure was procedural, and it is exactly the failure §8 names.</b></p></div><h2 class="sec">Which drift was avoidable, and which was discovery</h2><p class="lead">The split matters more than the total, because conflating them produces a useless lesson. The weighting is <b>sessions or session-fractions attributable</b>, taken from the gate file's own session boundaries — not from a sense of how bad each felt.</p><table>
+<thead><tr><th></th><th>≈ sessions</th><th>The items</th></tr></thead>
+<tbody>
+<tr><td><b>Discovery</b> — the only way the information could have been obtained</td><td><b>2.2</b></td><td>The per-batch update-policy defect (0.5) · the mirror's failure mode, five hypotheses and five refutations (1.0) · reflex 3's right-censoring (0.4) · gates C1/C4 and the Capacity Metrics instrument (0.3)</td></tr>
+<tr><td><b>Avoidable</b> — the information was available and nobody looked</td><td><b>1.6</b></td><td>Two Eventstreams for six sessions (0.6) · a mandated validator one <code>npm install</code> away, unrun for five (0.4) · cost tooling recorded absent twice while on the device (0.2) · kickoff defects (0.2) · a model with <b>zero relationships</b> that three checks passed (0.2)</td></tr>
+</tbody></table><div class="caveat"><b>≈58% discovery, 42% avoidable</b> — and the boundary is not crisp. The mirror jam was discovery, but <em>taking the same reading twice, five hours apart</em>, which is what finally distinguished “slow” from “stuck”, was available on day one and cost a session to learn.</div><div class="panel"><h4>The one thing that was neither</h4><p><b>Session 7 running capacity-bound.</b> The contract put Phase 6 in a session that needed no capacity. It ran under capacity pressure because E3 slipped. That is not avoidable drift and it is not discovery — it is a <b>dependency the plan created and then did not track</b>, the same shape as Phase 0 writing a gate that depended on a component nobody had built.</p></div>
+</section>
+
+<!-- C3 · VS PROJECT 24 -->
+<section id="t3" hidden>
+<h2 class="sec">C3 · Against Project 24</h2><p class="lead">Full comparison in <code>C3_Comparison_P24.md</code>, written mid-Session-7 — before E3's residue was known, and it should be read with that date on it.</p><table>
+<thead><tr><th></th><th>P24 · GlobalEnergy</th><th>P25 · Meridian Pay</th><th>Verdict</th></tr></thead>
+<tbody>
+<tr><td>Architecture</td><td>Lakehouse + Bronze/Silver/Gold notebooks</td><td>Eventhouse + KQL update policies and materialized views — <b>no notebooks in the transformation layer</b></td><td><span class="tag t-new">P25 is a different class of build</span></td></tr>
+<tr><td>Spark notebooks</td><td>many</td><td><b>1</b></td><td><span class="tag t-ok">P25</span></td></tr>
+<tr><td>Non-negotiable components</td><td>10 → 10</td><td>11 → <b>10 of 11</b></td><td><span class="tag t-no">P24</span></td></tr>
+<tr><td>Sessions</td><td>11 planned, 15–16 run</td><td>8 planned, 7 run, Phase 7 pending</td><td><span class="tag t-ok">P25</span></td></tr>
+<tr><td>Validator, first pass</td><td>recorded</td><td>26 → 0 in one round</td><td><span class="tag t-diff">both missed “0 first pass”</span></td></tr>
+<tr><td>Browser share</td><td>15%</td><td><b>17%</b></td><td><span class="tag t-no">P24</span></td></tr>
+<tr><td>Cost snapshots</td><td>8 of 8 claimed</td><td>5 of 7, two unrecoverable</td><td><span class="tag t-no">P24</span></td></tr>
+</tbody></table><div class="panel"><h4>A correction to Project 24's delivered record — the first this engine has produced from a later project</h4><p>P24's <code>B2_Plan_vs_Actual.md</code> recorded <code>validate_pbip.py</code> → <b>0 errors, 10 warnings</b>. <b>Nine of those ten were the <code>PAGENAV_ORPHAN_SELECTOR</code> false positive</b> — the rule read a pageNavigator's global <code>showHiddenPages</code> config object as a page reference. <b>P24's corrected row is 0 errors, 1 warning.</b></p><p class="basis">Reproduced against P24's own 115-visual corpus, frozen at <code>_controls/p24_visuals_bundle.json</code> — 9 real pageNavigators, and the corpus still reproduces the corrected row. <b>A lint rule that cries wolf on the engine's own reference implementation is worse than no rule.</b></p></div><div class="panel"><h4>Two sources disagree, and this document does not adjudicate</h4><p><code>OUTCOME_CONTRACT.md</code> §8 says P24 ran <b>16</b> sessions against 11 planned; <code>C3_Comparison_P24.md</code> says <b>15</b>. Unreconciled — P24's own closure record is the authority and this project should not settle it from the outside.</p></div>
+</section>
+
+<!-- C5 · DO BETTER -->
+<section id="t5" hidden>
+<h2 class="sec">C5 · What to do better next project</h2><p class="lead">Ranked by expected value in <code>C5_Do_Better_Next_Project.md</code>, each with its diagnosis before its prescription. The top five:</p><table>
+<thead><tr><th>#</th><th>Change</th><th>Evidence it is worth doing</th><th>Cost to adopt</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><b>Install the official PBIR CLI at session start</b>, before writing any visual JSON</td><td>24 of 26 first-pass validator errors were invented <code>matrix</code> property names that <code>formatting describe-object</code> refuses outright. The install line was already in the engine's own SKILL.md, line 148</td><td>~2 seconds</td></tr>
+<tr><td>2</td><td><b>Count the workspace items against the contract every session</b></td><td>Two mandatory Eventstreams survived six sessions and a closed export checkpoint. The item list was one click away throughout</td><td>one portal read per session</td></tr>
+<tr><td>3</td><td><b>Record the command you ran before recording anything as unavailable</b></td><td>Six negatives reported from an inability to look, in one project. Two destroyed cost data permanently</td><td>one line per claim</td></tr>
+<tr><td>4</td><td><b>Read a progress indicator twice, spaced</b></td><td><code>99% · 171.6 KB pending</code> read once said “catching up”; the identical reading five hours later said “jammed”. The missing reading cost the export checkpoint its session</td><td>one extra read</td></tr>
+<tr><td>5</td><td><b>Query the live model before trusting a projection check</b></td><td>The model had <b>zero relationships</b>. Two visuals shipped reading a constant numerator over a varying denominator, and the engine linter, the official PBIR validator and a 19/19 projection check all passed it — <b>because none of them asks whether the model can join</b></td><td>one <code>EVALUATE SUMMARIZECOLUMNS</code></td></tr>
+</tbody></table><h3 style="color:var(--risk)">Where the user's inputs cost time — asked for directly, answered directly</h3><table>
+<thead><tr><th></th><th>What happened</th><th>What it cost</th></tr></thead>
+<tbody>
+<tr><td><b>Screenshots where a query would have settled it</b></td><td>Several readings arrived as portal screenshots when the same value was one KQL line away. The mirror's row count was finally settled <em>by query, not by screenshot</em> — and that sentence had to be written into the runbook to make it happen</td><td>Repeated round-trips on values that had a cheap authoritative source</td></tr>
+<tr><td><b>Decisions left open that the build then guessed at</b></td><td>The Eventstream question sat unanswered for six sessions while the build proceeded as though the component existed</td><td>A closed checkpoint invalidated, and a component count corrected at closure</td></tr>
+</tbody></table><div class="panel"><h4>And two things the user did that I did not</h4><p><b>The theme.</b> I ruled out the theme — I checked <code>visualStyles</code> for a <code>cardVisual</code> entry, found none, and moved on. The user swapped themes and watched the cards appear. <b>The cause was the theme.</b> An hour of file forensics found nothing; one comparison found it in a minute.</p><p><b>The stop calls.</b> Twice the user chose to stop at a blocker and carry it rather than let a session burn against it. Both calls were right.</p><p class="basis">The theme finding is now guide §122, a lint rule with two controls, and a sweep of all 37 engine theme files — <b>32 of which carried the same defect</b>.</p></div>
+</section>
+
+<!-- C6 · ASSUMPTION TESTED -->
+<section id="t6" hidden>
+<h2 class="sec">C6 · Testing one assumption the project ran on</h2><p class="lead">Every project inherits a rule it never questioned. Full working in <code>C6_Inherited_Assumption_Tested.md</code>.</p><div class="panel"><h4>The assumption</h4><p><em>“UI-driving days cost roughly 3.5× more tokens per hour than offline days.”</em> Carried in <code>CLAUDE.md</code> as a standing justification for the no-clicking rule.</p></div><div class="panel"><h4>The result — <b>withdrawn</b></h4><p><code>cache_read_per_hour</code> is <b>only comparable between sessions of the same working mode</b>. A session that spends its time waiting on a human is not cheap per hour because it is efficient; it is cheap per hour because the hour is mostly waiting. The scale-free quantity is <b>cache-read per turn</b>, and on that measure the difference the claim asserted does not survive.</p><p><b>The no-clicking rule itself stands.</b> Its real justification is correctness and safety — a click cannot be diffed, reviewed, or re-run — not cost. <b>The rule keeps its force and loses an argument it never needed.</b></p><p class="basis">A hypothesis about a cost anomaly in Session 6 was also written into a tool docstring as fact before being tested, and refuted by the very next control run. The docstring now carries the refutation, including the turn on which the claim was wrong.</p></div>
+</section>
+
+<!-- C8 · COST -->
+<section id="t8" hidden>
+<h2 class="sec">C8 · Cost</h2><div class="warnbox"><b>Three independent reasons these totals are a floor, and it matters which.</b> Sessions 4 and 5 are <b>lost and unrecoverable</b> (~29% of the project by session count, and they are the two that carried the mirror blocker). Session 7's transcript <em>begins</em> with a context-compaction boundary, so it describes the tail of its session only. Sessions 1, 2, 3 and 6 are <b>compaction-<em>unknown</em></b> — captured before the tool could detect it, and reported as unknown rather than as clean.</div><div class="tiles"><div class="tile"><p class="k">Active working time</p><div class="v">7.5 h</div><p class="n">Over 9 sittings, 5 of 7 sessions. Working time, not elapsed.<br><span style='color:var(--ink3)'>Basis: <code>--merge</code> over <code>_cost/</code></span></p></div><div class="tile"><p class="k">Assistant turns</p><div class="v">1,415</div><p class="n">838 tool calls.<br><span style='color:var(--ink3)'>Basis: same</span></p></div><div class="tile"><p class="k">Cache-read per turn</p><div class="v good">246,385</div><p class="n">P23's single session: <b>478,216</b>.<br><span style='color:var(--ink3)'>The scale-free number</span></p></div><div class="tile"><p class="k">Subagent cache-read</p><div class="v warn">21,910,540</div><p class="n">Session 7 alone — <b>39% of that session's own visible spend, on top of it</b>, and invisible to every snapshot this engine has ever taken.<br><span style='color:var(--ink3)'>Basis: <code>subagents/agent-*.jsonl</code></span></p></div></div><div class="panel"><h4>The split-session hypothesis, tested on this project's own data</h4><p>The column does not rise: <b>204,882 → 205,323 → 320,794 → 233,059 → 228,648</b>. Four of five sit in a 205k–233k band; the outlier is Session 3 — the <em>longest</em> session, not the latest. If the driver were accumulation across sessions, 6 and 7 would be the expensive ones.</p><p><b>Not falsified, and not confirmed.</b> Five points with two holes is a shape, not a test.</p><p class="basis">A confound that cannot be removed from this data: Sessions 1 and 3 ran on Opus and the rest on Sonnet, and <code>_cost/session-NN.json</code> <b>records no model field</b> — so the routing cannot even be verified from disk, let alone controlled for. Recorded as a defect in the instrument, not as a result.</p></div><div class="panel"><h4>Two blind spots this analysis found in its own instrument</h4><p><b>Context compaction truncates the transcript.</b> Every long session's snapshot has silently been a tail. Same family as the <em>“largest of N candidates”</em> basis line corrected earlier the same day: <b>a number that looks like a total and is not one.</b></p><p><b>Subagent tokens appear in no snapshot ever taken.</b> Reported separately, never folded in — folding them in would silently change what every historical snapshot's numbers mean. And the subagent <em>output</em> figure is <b>refused rather than printed</b>: 572 / 287 / 796 tokens across 43 / 31 / 96 records, against the Agent tool's own returned 203,865 / 126,839 / 301,047.</p><p class="basis">Six controls frozen at <code>_controls/cost_tool_compaction_subagents.txt</code>, including a floor proving the false-positive control actually parsed records. <b>A figure that cannot be reconciled is not published as a figure; the discrepancy is published instead.</b></p></div><div class="panel"><h4>The most expensive thing in this project cannot be priced</h4><p>It was not a build. It was the mirror blocker — one <code>.set-or-replace</code> on a table whose OneLake mirror was already live, which cost the measure load, cost export checkpoint E3 its scheduled session, and made Phase 6 run capacity-bound against a contract that said it would not.</p><p><b>Sessions 4 and 5 are the two that carried it, and they are the two whose cost data is gone.</b></p><p class="basis">That is the strongest argument in this document for the snapshot discipline the tool exists to enforce.</p></div>
+</section>
+
+<!-- EVIDENCE -->
+<section id="t9" hidden>
+<h2 class="sec">Evidence — the proof chain</h2><p class="lead">Every claim on this page resolves to a file in the repository. These are the artefacts a reader should open first.</p><table>
+<thead><tr><th>Artefact</th><th>What it settles</th></tr></thead>
+<tbody>
+<tr><td><code>00_Plan/E3_Read_Back_Results.md</code></td><td>Seven tables read two-sided at delta 0 across an independent engine; thirteen more reconciled by derivation; the <code>.export</code> deviation with its residual risk. <b>Carries its own correction</b> — a dedupe claim that was off by 15 and overstated its independence</td></tr>
+<tr><td><code>00_Plan/Gate_Check_Results.md</code></td><td>Every gate, reading, hypothesis and refutation, in session order, with the wrong ones left in place</td></tr>
+<tr><td><code>_controls/lint_rule_controls.txt</code></td><td><b>9/9</b> — three controls per lint rule, each with a floor a “0 findings” run cannot satisfy</td></tr>
+<tr><td><code>_controls/lint_scan_floor.txt</code></td><td>The silent-empty-scan defect, its fix, and two floor runs that exit 3</td></tr>
+<tr><td><code>_controls/lint_theme_blanks_cardvisual.txt</code></td><td>The theme that blanked KPI cards while every validator stayed green</td></tr>
+<tr><td><code>_controls/rtd_retired_objects.txt</code></td><td><b>5 DEAD, exit 1</b> on the pre-fix tile queries — five, not the three the portal surfaced</td></tr>
+<tr><td><code>_controls/cost_tool_compaction_subagents.txt</code></td><td>Six controls on the two cost-tool blind spots</td></tr>
+<tr><td><code>_controls/p24_visuals_bundle.json</code></td><td>P24's 115-visual corpus — 9 real pageNavigators. The artefact that proves P24's linter row was wrong. <b>Expand it under <code>definition/pages/</code></b></td></tr>
+<tr><td><code>PROJECT_STATUS.md</code></td><td>Plan versus built, dated, naming what is unfinished before what is done</td></tr>
+</tbody></table><h2 class="sec">C7 · Folder disposition — executed</h2><table>
+<thead><tr><th>Class</th><th>Files</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td>Keep — deliverable</td><td>118</td><td>ships, or is named by something that ships</td></tr>
+<tr><td>Keep — evidence</td><td>47</td><td>frozen readings, control corpora, cost snapshots, the gate record</td></tr>
+<tr><td>Archive</td><td>4, <b>executed</b></td><td>superseded by a later file in the same folder</td></tr>
+<tr><td>Delete</td><td><b>0</b></td><td>every candidate turned out to be frozen evidence or a rebuild input</td></tr>
+</tbody></table><div class="caveat"><b><code>_to_delete/</code> holds two report snapshots that must NOT be deleted.</b> They are the only copy of the pre-decoration report state, and the reproducibility measurement in C2 §3.2 is taken against them. They belong in <code>_Archive/06_Report/</code>.</div><h2 class="sec">Open at close</h2><table>
+<thead><tr><th>#</th><th>Item</th><th>State</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>RTD page screenshots — the last E3 item</td><td>Fraud Watch's KPI row and alert feed read empty at the default reference window: its <code>_endTime</code> sits ~35 minutes past the end of the data, and reflex 1/2 firings fall outside the 24-hour slice. <b>A window problem, not a query problem</b></td></tr>
+<tr><td>2</td><td>DQ rule 2's shortfall of 2 (8,231 vs 8,233)</td><td>Raised Session 3, carried untouched to Session 7. <b>An open question, never a pass</b></td></tr>
+<tr><td>3</td><td><code>10_streaming_dedupe_maintenance.kql</code></td><td>On HOLD, never run. It stage-replaces two curated tables carrying live mirrors — the exact operation that cost this project two sessions</td></tr>
+<tr><td>4</td><td><code>14_alerts_v2_rebuild.kql</code> STEP 5</td><td><b>Unexecutable for four sessions</b> — <code>.rename tables</code> is refused while a mirroring policy is enabled</td></tr>
+<tr><td>5</td><td><code>build_report.py</code> vs the delivered report</td><td>Content: still the source of truth. Artefact: <b>no longer</b> — 14 files carry Desktop-only configuration including the decomposition tree's pinned expansion states</td></tr>
+<tr><td>6</td><td><code>RTD_MeridianPay_with_footers.json</code></td><td><code>markdownCard</code> has never been proven to import. One import settles it</td></tr>
+</tbody></table>
+</section>
+
+<!-- PHASE 7 · PUBLISHING -->
+<section id="t10" hidden>
+<h2 class="sec">Phase 7 · Publishing — added after close, Session 8</h2><p class="lead">Closure was compiled at the end of Session 7. Session 8 published the project, and three things happened that belong in this document rather than only in a handover: a defect in the publish gate, a contradiction that closure could not settle being settled, and a fourth instrument caught reporting a pass it had not earned.</p><div class="tiles"><div class="tile"><p class="k">Files gated and packaged</p><div class="v good">89</div><p class="n">Repository, rebuild guide, portfolio card and pitch deck all built.<br><span style='color:var(--ink3)'>0 BLOCK instances at scrub</span></p></div><div class="tile"><p class="k">Dead links the gate passed</p><div class="v warn">8</div><p class="n">Every published link to the guide pointed one folder too high.<br><span style='color:var(--ink3)'>Caught by hand, then by a new rule</span></p></div><div class="tile"><p class="k">Visual defects found by QA agents</p><div class="v">28</div><p class="n">Across three adversarial passes over 17 rendered slides.<br><span style='color:var(--ink3)'>None found by re-reading the generator</span></p></div><div class="tile"><p class="k">Cache-read per turn, Session 8</p><div class="v good">146,047</div><p class="n">The <b>lowest</b> of the six captured sessions — and the last one.<br><span style='color:var(--ink3)'>C6 predicted flat, not rising</span></p></div></div><div class="warnbox"><b>The publish gate passed eight dead links, and its reason for doing so was a good one applied one step too far.</b> <code>check_rebuild_materials.py</code> deliberately does not fetch external URLs — neither the sandbox nor the device VM has egress, and a network check here would be a check that never runs and always reports a pass. But <em>“we do not fetch them”</em> had become <em>“we do not look at them at all”</em>, and a Pages link into the repository being published is the one external link that is <b>fully checkable offline</b>: its URL path maps to a file in the very tree being gated. Five README links, the portfolio card and the publish instructions all pointed at <code>…/meridianpay-rti-fabric/guide.html</code> while the file sits at <code>docs/guide.html</code>.</div><div class="panel"><h4>The rule that now catches it, and the one it could not be</h4><p>The check resolves every Pages link into this repository against the file tree, and fails when <b>no single candidate serving folder</b> — root or <code>/docs</code> — resolves them all. Verified both ways: the pre-fix state trips it, the fixed state passes clean. Three new self-test controls, thirteen in total.</p><p>It deliberately stops short of asserting which folder Pages actually serves, because that is configuration this repository cannot see. What it does instead is force the ambiguity to be closed in writing — <code>RUN_THIS_TO_PUBLISH.md</code> now names the folder.</p><p class="basis">The general shape, for the next project: <b>when a check declines to verify something, write down which part it declines to verify.</b> “We cannot reach the network” does not license “we will not read the string”. The offline-checkable part of an unverifiable claim is usually most of it.</p></div><h2 class="sec">A contradiction closure left open, closed</h2><table>
+<thead><tr><th>Item</th><th>What the record said</th><th>How it was settled</th></tr></thead>
+<tbody>
+<tr><td><code>terminal_compromise</code> episode count</td><td><em>“all 40”</em> in the gate file against §5's frozen <b>25</b>. C1 recorded it <b>Unreconciled</b> and refused to pick</td><td><code>notebooks/generator/episodes.py:18-19</code> declares <code>N_CARD_TESTING = 40</code> and <code>N_TERMINAL_COMPROMISE = 25</code>. The generator is seeded and byte-reproducible, so that file <b>is</b> what was planted. §5 is right; the “40” is the card-testing count wearing the wrong label</td></tr>
+</tbody></table><div class="caveat"><b>Arithmetic could not have settled this, and that is exactly why it survived closure.</b> <code>ground_truth</code> = <b>137</b> is verified three times on two paths — but 40+25+12+60 and 25+40+12+60 are the same number. <b>The sum that looked like a control was blind to the precise swap in question.</b> It took reading the code.</div><h2 class="sec">A fourth instrument, caught a different way</h2><div class="warnbox">The first Session 8 cost snapshot was taken with a <b>stale copy</b> of <code>capture_session_cost.py</code> — the pre-fix version, sitting in the container's staged mirror while the fixed one sat on the device. It wrote a snapshot with no <code>partial</code> flag, no compaction record and no subagent count. <b>It looked perfect.</b> Caught by reading the JSON for the three fields Skill 11 says to read, not by anything the tool printed.</div><div class="panel"><h4>Why this one is different from the other three</h4><p>Three instruments in this project were caught reporting unearned passes <b>by being wrong</b>: a linter that walked nothing, a query checker resolving against its own DDL, a scrubber flagging its own redaction. Each was fixed in the file.</p><p>This one was caught <b>by being the wrong copy</b> — and not one of those three fixes addresses it, because every fix was made in a file rather than in whatever the command line actually resolves to.</p><p class="basis">A tool that was fixed is not the same as a tool you are running. The snapshot was rewritten with the correct binary and the discarded one is not in <code>_cost/</code>.</p></div><h2 class="sec">Cost, restated over six of eight sessions</h2><table>
+<thead><tr><th></th><th>At close of Session 7</th><th>At close of Session 8</th></tr></thead>
+<tbody>
+<tr><td>Sessions captured</td><td>5 of 7</td><td><b>6 of 8</b> — 4 and 5 still lost and unrecoverable</td></tr>
+<tr><td>Active working time</td><td>7.5 h</td><td><b>8.6 h</b> over 11 sittings</td></tr>
+<tr><td>Assistant turns · tool calls</td><td>1,415 · 838</td><td><b>1,623 · 986</b></td></tr>
+<tr><td>Browser share</td><td>17%</td><td><b>15%</b> — Session 8 ran at 0%</td></tr>
+<tr><td>Cache-read</td><td>348,635,249</td><td><b>379,013,063</b></td></tr>
+<tr><td>Cache-read per turn</td><td>246,385</td><td><b>233,526</b></td></tr>
+<tr><td>Subagent cache-read, counted separately</td><td>21,910,540 (session 7)</td><td><b>66,167,251</b> across sessions 7 and 8</td></tr>
+</tbody></table><div class="caveat"><b>Session 8's subagents cost more than Session 8 did:</b> 44.3M cache-read against the session's own 30.4M. Most of it is three adversarial visual-QA passes over seventeen rendered slides, which returned eleven, then eleven, then six defects that re-reading the generator had not produced — including a caption asserting <em>“zero firings in this window”</em> beside a screenshot reading 72 and 10. A real cost with a real return, counted separately because folding it in would change what every earlier snapshot means.</div>
+</section>
+
+<footer>Project 25 closure analysis · compiled Session 7, 2026-08-19 · Power BI Automation Engine, Skill 10 (Type D).<br>Built by <code>build_closure_html.py</code> from <code>_ENGINE/templates/arch_page.py</code> — not hand-written. Sources: <code>C1_Post_Mortem.md</code> · <code>C2_Plan_vs_Actual.md</code> · <code>C3_Comparison_P24.md</code> · <code>C5_Do_Better_Next_Project.md</code> · <code>C6_Inherited_Assumption_Tested.md</code> · <code>C7_Folder_Disposition.md</code> · <code>C8_Cost_Analysis.md</code>, and the frozen runs in <code>09_Closure/_controls/</code>.<br>Chart palette: dataviz reference dark categorical slots 1–3, validated against surface <code>#161d2b</code> — lightness band PASS · chroma PASS · CVD worst adjacent ΔE 9.4 · normal-vision ΔE 26.5 · contrast PASS. Endpoints and identifiers are scrubbed from this document per the standing publish rule (<code>scrub_check.py</code>, 0 INSTANCE findings).</footer>
+
+</div>
+<div class="tt" id="tt"></div>
+<script>
+  const tabs=[...document.querySelectorAll('nav button')];
+  tabs.forEach(b=>b.addEventListener('click',()=>{
+    tabs.forEach(x=>x.setAttribute('aria-selected', x===b));
+    document.querySelectorAll('section').forEach(s=>s.hidden = s.id!==b.dataset.t);
+    window.scrollTo({top:0,behavior:'smooth'});
+  }));
+
+const SVG='http://www.w3.org/2000/svg';
+const mk=(n,a={})=>{const e=document.createElementNS(SVG,n);for(const k in a)e.setAttribute(k,a[k]);return e;};
+const _tt=document.getElementById('tt');
+function bind(el,html){
+  el.style.cursor='default';
+  el.addEventListener('mousemove',e=>{_tt.innerHTML=html;_tt.style.opacity=1;
+    _tt.style.left=Math.min(e.clientX+14,innerWidth-300)+'px';_tt.style.top=(e.clientY+14)+'px';});
+  el.addEventListener('mouseleave',()=>_tt.style.opacity=0);
+}
+
+/* ---- c-cost: cache-read per turn, by session. Missing sessions are GAPS, not zeros. ---- */
+(()=>{const d=[["1 Architecture",204882,0.9],["2 Gates+Git",205323,1.9],["3 KQL+DQ",320794,3.3],
+  ["4 Reflexes",null,null],["5 RTD+model",null,null],["6 Report",233059,0.5],["7 Closure",228648,0.9]];
+ const W=920,LP=150,RP=96,BH=24,GAP=10,H=d.length*(BH+GAP)+34,P23=478216;
+ const max=Math.max(P23,...d.map(x=>x[1]||0))*1.04, sc=v=>v/max*(W-LP-RP);
+ const s=mk('svg',{viewBox:`0 0 ${W} ${H}`,width:'100%',role:'img','aria-label':
+   'Cache read per turn by session; four of five sessions sit between 205 and 233 thousand, session 3 is the outlier at 321 thousand, and sessions 4 and 5 were never captured'});
+ d.forEach((x,i)=>{const y=i*(BH+GAP)+6;
+   s.appendChild(mk('rect',{x:LP,y:y,width:W-LP-RP,height:BH,rx:4,fill:'#1c2534'}));
+   s.appendChild(mk('text',{x:LP-10,y:y+BH*0.68,'text-anchor':'end','font-size':12.5,
+     fill:x[1]?'#e8edf5':'#6b7a91'})).textContent=x[0];
+   if(x[1]===null){
+     s.appendChild(mk('text',{x:LP+10,y:y+BH*0.68,'font-size':12,fill:'#6b7a91','font-style':'italic'}))
+       .textContent='snapshot lost — not zero, not omitted';
+     return;}
+   const r=mk('rect',{x:LP,y:y,width:sc(x[1]),height:BH,rx:4,fill:i===2?'var(--s2)':'var(--s1)'});
+   s.appendChild(r);
+   bind(r,`<b>Session ${x[0]}</b><br>${x[1].toLocaleString()} cache-read per turn<br>`+
+     `<span style="color:#9aa8bd">${x[2]} active hours</span>`);
+   s.appendChild(mk('text',{x:LP+sc(x[1])+9,y:y+BH*0.68,'font-size':12,fill:'#c3c2b7'}))
+     .textContent=x[1].toLocaleString();});
+ const px=LP+sc(P23);
+ s.appendChild(mk('line',{x1:px,y1:2,x2:px,y2:H-24,stroke:'var(--warn)','stroke-width':1.5,
+   'stroke-dasharray':'5 4'}));
+ s.appendChild(mk('text',{x:px-8,y:H-26,'text-anchor':'end','font-size':11.5,fill:'var(--warn)'}))
+   .textContent='P23 single session · 478,216';
+ s.appendChild(mk('text',{x:LP,y:H-6,'font-size':11.5,fill:'var(--muted)'}))
+   .textContent='5 of 7 sessions captured · sessions 4 and 5 unrecoverable · session 7 is a compaction fragment';
+ document.getElementById('c-cost').appendChild(s);})();
+
+/* ---- c-detonate: planted phase -> first detonation phase ---- */
+(()=>{const d=[["Gate C2 depended on an unbuilt component",0,2],
+  ["Two mandatory Eventstreams never built",1,5],
+  ["E2 closed on a clause nobody counted",3,6],
+  ["arg_max MV cannot time-travel",2,3],
+  ["Per-batch dedupe fixed the backfill, not the stream",2,3],
+  ["Reflex 2 graded against its own evidence",3,4],
+  ["Gate C2 proved with 5 shortcuts; page needs 7",3,4],
+  [".set-or-replace on a live mirror",4,4],
+  ["alerts dropped; RTD tiles named it",4,6]];
+ const W=920,LP=336,RP=40,RH=26,H=d.length*RH+62;
+ const sc=p=>LP+p/6*(W-LP-RP);
+ const s=mk('svg',{viewBox:`0 0 ${W} ${H}`,width:'100%',role:'img','aria-label':
+   'Nine defects, each drawn from the phase that planted it to the phase it first detonated in; mean gap 1.7 phases, longest 4'});
+ for(let p=0;p<=6;p++){const x=sc(p);
+   s.appendChild(mk('line',{x1:x,y1:4,x2:x,y2:H-44,stroke:'var(--grid)','stroke-width':1}));
+   s.appendChild(mk('text',{x:x,y:H-30,'text-anchor':'middle','font-size':11.5,fill:'var(--muted)'}))
+     .textContent='P'+p;}
+ d.forEach((x,i)=>{const y=i*RH+18;
+   s.appendChild(mk('text',{x:LP-14,y:y+4,'text-anchor':'end','font-size':12.5,fill:'#e8edf5'}))
+     .textContent=x[0];
+   if(x[1]!==x[2])s.appendChild(mk('line',{x1:sc(x[1]),y1:y,x2:sc(x[2]),y2:y,
+     stroke:'var(--s2)','stroke-width':2,opacity:.55}));
+   const c1=mk('circle',{cx:sc(x[1]),cy:y,r:7,fill:'none',stroke:'var(--s3)','stroke-width':2.5});
+   const c2=mk('circle',{cx:sc(x[2]),cy:y,r:4.5,fill:'var(--s2)',stroke:'var(--panel)','stroke-width':1.5});
+   s.appendChild(c1);s.appendChild(c2);
+   const t=`<b>${x[0]}</b><br>planted Phase ${x[1]} &middot; detonated Phase ${x[2]}<br>`+
+     `<span style="color:#9aa8bd">gap ${x[2]-x[1]} phase${x[2]-x[1]===1?'':'s'}</span>`;
+   bind(c1,t);bind(c2,t);});
+ s.appendChild(mk('text',{x:LP,y:H-6,'font-size':11.5,fill:'var(--muted)'}))
+   .textContent='mean first-detonation gap 1.7 phases · longest 4 · six of the nine were assertions never counted';
+ document.getElementById('c-detonate').appendChild(s);})();
+
+/* ---- c-chains: correction chain lengths ---- */
+(()=>{const d=[["The mirror diagnosis",5],["The alerts cleanup",5],["Trial days remaining",5],
+  ["Reflex 3's precision",4],["Cost-capture tooling",4],["alerts column count",3],
+  ["RTD tile floor",3],["P24's lint record",3],["Toggle blast radius",2],["The binding blocker",2]];
+ const W=920,LP=210,RP=150,BH=20,GAP=8,H=d.length*(BH+GAP)+28;
+ const sc=v=>v/5*(W-LP-RP);
+ const s=mk('svg',{viewBox:`0 0 ${W} ${H}`,width:'100%',role:'img','aria-label':
+   'Ten correction chains; three of length five, two of length four. Project 24 recorded four chains in total'});
+ d.forEach((x,i)=>{const y=i*(BH+GAP)+4;
+   s.appendChild(mk('text',{x:LP-10,y:y+BH*0.72,'text-anchor':'end','font-size':12.5,fill:'#e8edf5'}))
+     .textContent=x[0];
+   s.appendChild(mk('rect',{x:LP,y:y,width:W-LP-RP,height:BH,rx:4,fill:'#1c2534'}));
+   const r=mk('rect',{x:LP,y:y,width:sc(x[1]),height:BH,rx:4,fill:x[1]>=5?'var(--s2)':'var(--s1)'});
+   s.appendChild(r);
+   bind(r,`<b>${x[0]}</b><br>${x[1]} steps<br><span style="color:#9aa8bd">each step is a stated `+
+     `conclusion later corrected</span>`);
+   s.appendChild(mk('text',{x:LP+sc(x[1])+9,y:y+BH*0.72,'font-size':12,fill:'#c3c2b7'}))
+     .textContent=x[1]+' steps';});
+ s.appendChild(mk('text',{x:LP,y:H-4,'font-size':11.5,fill:'var(--muted)'}))
+   .textContent='Project 24 recorded four chains in total; Project 25 has ten';
+ document.getElementById('c-chains').appendChild(s);})();
+</script>
+</body>
+</html>

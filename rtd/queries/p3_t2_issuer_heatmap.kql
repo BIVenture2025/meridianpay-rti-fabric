@@ -1,0 +1,13 @@
+// P3 T2 -- Issuer BIN health by hour of day  [heatmap]
+// Column types are deliberate. The RTD heatmap requires three columns and, when
+// x is a string, y must also be a string -- so hour-of-day is emitted as a
+// zero-padded "HH:00" label rather than an int. Value is the numeric field.
+mv_issuer_baseline
+| where hour_bucket between (_startTime .. _endTime)
+| extend hod = hourofday(hour_bucket)
+| summarize approved_sum = sum(approved), total_sum = sum(total) by issuer_bin, hod
+| where total_sum > 0
+| project ['Issuer BIN'] = issuer_bin,
+          ['Hour'] = strcat(iff(hod < 10, '0', ''), tostring(hod), ':00'),
+          ['Approval %'] = round(100.0 * todouble(approved_sum) / todouble(total_sum), 1)
+| order by ['Issuer BIN'] asc, ['Hour'] asc

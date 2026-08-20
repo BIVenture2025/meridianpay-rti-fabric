@@ -1,0 +1,19 @@
+// P2 T7 -- Live alert feed  [table]
+// Ordered by window_start, deliberately. The implementation guide says "sorted
+// desc by fired_at"; every backfill-seeded row in `alerts_v2` carries the identical
+// constant fired_at = datetime(2026-08-17) written by
+// 11_activator_reflex_alerts.kql, so fired_at cannot order anything. window_start
+// is when the signal actually occurred. Recorded in Gate_Check_Results.md.
+alerts_v2
+| where reflex_type in ('card_testing_burst', 'terminal_compromise')
+| where window_start between (_startTime .. _endTime)
+| order by window_start desc
+| project Signalled = window_start,
+          Reflex = reflex_type,
+          Terminal = entity_id,
+          Store = store_id,
+          Merchant = merchant_id,
+          Signal = round(signal_value, 3),
+          Threshold = round(threshold_value, 3),
+          Cohort = maturity_cohort
+| take 200

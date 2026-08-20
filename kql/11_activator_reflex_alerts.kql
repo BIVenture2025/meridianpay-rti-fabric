@@ -1,0 +1,157 @@
+// ============================================================================
+// Project 25 (Meridian Pay) -- Session 4, Phase 3
+// 11_activator_reflex_alerts.kql                          [NEW -- 2026-08-18]
+//
+// Two jobs in one file:
+//   A. A schema gap found while preparing this session: `alerts`, as created
+//      in 00_raw_and_staging_tables.kql, has NO maturity_cohort column, but
+//      OUTCOME_CONTRACT.md's exit criteria (Sec7, "The pitch") requires every
+//      firing to carry one, and Session 6 groups precision/recall by it,
+//      never blended. Fixed here with an additive .alter-merge -- safe on the
+//      existing empty table, nothing to migrate.
+//   B. The four reflex-detection queries against backfill data (as_of pinned
+//      to SIM_NOW, per HANDOVER.md's warning -- real now() has drifted past
+//      the generator's frozen clock and reflex 3 in particular will report
+//      every terminal dark if you skip as_of), each followed by the INSERT
+//      that persists a demonstrable firing to `alerts` with evidence and
+//      maturity cohort.
+//
+// WHY THIS EXISTS SEPARATELY FROM THE ACTIVATOR PORTAL RULES:
+// Activator's native actions (Teams/email/Power Automate) are what makes a
+// reflex "fire" visibly and satisfy the exit criterion "≥1 demonstrably
+// fired, evidence saved" -- that's the portal side, in
+// SESSION_04_PORTAL_STEPS.md. But Activator does not have a documented native
+// action to insert a row into an Eventhouse table, and `alerts` is the table
+// Session 6's precision/recall grading actually reads. So this script is the
+// independent, queryable persistence path for `alerts` -- it does not depend
+// on which Activator action type turns out to be available, and it can be
+// re-run any time reflex coverage needs refreshing (e.g. after live replay
+// adds real-time firings on top of this backfill-derived seed set).
+//
+// RUN ONE STATEMENT AT A TIME.
+// ============================================================================
+
+// ---- STEP 0: add the missing column ----------------------------------------
+
+.alter-merge table alerts (maturity_cohort: string)
+
+.show table alerts schema as json
+// Confirm maturity_cohort now appears. 11 columns total (10 original + 1).
+
+// ---- STEP 1: reflex 1 -- card-testing burst --------------------------------
+// Defaults from fn_reflex1_card_testing_burst: min_low_value=10, min_decline_rate=0.5.
+// mv_terminal_activity_5min has no explicit as_of param -- it's already windowed
+// to the backfill period, so nothing to pin here.
+
+fn_reflex1_card_testing_burst() | count
+// Sanity read before writing anything. Compare against ground_truth's 40
+// card_testing_burst episodes -- expect multiple 5-min buckets per episode,
+// not a 1:1 row match; that's a Session 6 recall question, not this one's.
+
+.set-or-append alerts <|
+fn_reflex1_card_testing_burst()
+| extend alert_id = strcat("R1-", tostring(new_guid())),
+         fired_at = datetime(2026-08-17),
+         reflex_type = "card_testing_burst",
+         entity_type = "terminal",
+         entity_id = terminal_id,
+         window_start = bucket_5min,
+         window_end = bucket_5min + 5m,
+         signal_value = decline_rate,
+         threshold_value = 0.5,
+         evidence = pack("auth_count", auth_count, "low_value_count", low_value_count,
+                          "distinct_tokens", distinct_tokens, "decline_rate", decline_rate),
+         maturity_cohort = case(
+             datetime_diff('day', datetime(2026-08-17), bucket_5min) >= 60, "graded_T90_T60",
+             datetime_diff('day', datetime(2026-08-17), bucket_5min) >= 30, "partially_matured_T60_T30",
+             "awaiting_grading_T30_T")
+| project alert_id, fired_at, reflex_type, entity_type, entity_id, merchant_id, store_id,
+          window_start, window_end, signal_value, threshold_value, evidence, maturity_cohort
+
+// ---- STEP 2: reflex 2 -- terminal compromise --------------------------------
+// as_of MUST be passed -- default is now(), which has drifted past SIM_NOW.
+
+fn_reflex2_terminal_compromise(24, 168, datetime(2026-08-17), 0.15) | count
+
+.set-or-append alerts <|
+fn_reflex2_terminal_compromise(24, 168, datetime(2026-08-17), 0.15)
+| extend alert_id = strcat("R2-", tostring(new_guid())),
+         fired_at = datetime(2026-08-17),
+         reflex_type = "terminal_compromise",
+         entity_type = "terminal",
+         entity_id = terminal_id,
+         window_start = tamper_at,
+         window_end = tamper_at,
+         signal_value = now_rate,
+         threshold_value = base_rate + 0.15,
+         evidence = pack("now_rate", now_rate, "base_rate", base_rate, "step_change", step_change),
+         maturity_cohort = case(
+             datetime_diff('day', datetime(2026-08-17), tamper_at) >= 60, "graded_T90_T60",
+             datetime_diff('day', datetime(2026-08-17), tamper_at) >= 30, "partially_matured_T60_T30",
+             "awaiting_grading_T30_T")
+| project alert_id, fired_at, reflex_type, entity_type, entity_id, merchant_id, store_id,
+          window_start, window_end, signal_value, threshold_value, evidence, maturity_cohort
+
+// ---- STEP 3: reflex 3 -- terminal dark --------------------------------------
+// Not fraud -- contract Sec5. Still written to `alerts`; reflex_type distinguishes it.
+
+fn_reflex3_terminal_dark(20, datetime(2026-08-17)) | count
+
+.set-or-append alerts <|
+fn_reflex3_terminal_dark(20, datetime(2026-08-17))
+| extend alert_id = strcat("R3-", tostring(new_guid())),
+         fired_at = datetime(2026-08-17),
+         reflex_type = "terminal_dark",
+         entity_type = "terminal",
+         entity_id = terminal_id,
+         window_start = last_seen,
+         window_end = datetime(2026-08-17),
+         signal_value = todouble(minutes_dark),
+         threshold_value = 20.0,
+         evidence = pack("last_seen", last_seen, "minutes_dark", minutes_dark),
+         maturity_cohort = case(
+             datetime_diff('day', datetime(2026-08-17), last_seen) >= 60, "graded_T90_T60",
+             datetime_diff('day', datetime(2026-08-17), last_seen) >= 30, "partially_matured_T60_T30",
+             "awaiting_grading_T30_T")
+| project alert_id, fired_at, reflex_type, entity_type, entity_id, merchant_id, store_id,
+          window_start, window_end, signal_value, threshold_value, evidence, maturity_cohort
+
+// ---- STEP 4: reflex 4 -- issuer degradation ---------------------------------
+// entity_type is "issuer", not "terminal" -- no single terminal/store/merchant
+// applies. entity_id carries issuer_bin; merchant_id/store_id left empty.
+
+fn_reflex4_issuer_degradation(14, 2.5, datetime(2026-08-17)) | count
+
+.set-or-append alerts <|
+fn_reflex4_issuer_degradation(14, 2.5, datetime(2026-08-17))
+| extend alert_id = strcat("R4-", tostring(new_guid())),
+         fired_at = datetime(2026-08-17),
+         reflex_type = "issuer_degradation",
+         entity_type = "issuer",
+         entity_id = issuer_bin,
+         merchant_id = "",
+         store_id = "",
+         window_start = hour_bucket,
+         window_end = hour_bucket + 1h,
+         signal_value = approval_rate,
+         threshold_value = baseline,
+         evidence = pack("approval_rate", approval_rate, "baseline", baseline, "anomaly_score", score),
+         maturity_cohort = case(
+             datetime_diff('day', datetime(2026-08-17), hour_bucket) >= 60, "graded_T90_T60",
+             datetime_diff('day', datetime(2026-08-17), hour_bucket) >= 30, "partially_matured_T60_T30",
+             "awaiting_grading_T30_T")
+| project alert_id, fired_at, reflex_type, entity_type, entity_id, merchant_id, store_id,
+          window_start, window_end, signal_value, threshold_value, evidence, maturity_cohort
+
+// ---- STEP 5: the evidence read-back -- do this before calling E2 done -----
+
+alerts | summarize firings = count() by reflex_type, maturity_cohort | order by reflex_type asc
+
+alerts | count
+// Exit criterion check: > 0, and all four reflex_type values present. If any
+// reflex_type is absent, that reflex found nothing in the backfill window --
+// worth knowing before Session 6 claims "4 reflexes, 4 evidenced" (contract
+// Sec6, Session 4 exit: "4 reflexes, >=1 fired with evidence").
+
+alerts | where reflex_type == "card_testing_burst" | take 3
+// Screenshot or export this row set as the saved evidence artifact for E2.

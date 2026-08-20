@@ -1,0 +1,8 @@
+// P1 T2 -- Dark right now  [stat]
+// Calls the counted function fn_reflex3_terminal_dark rather than re-deriving the
+// rule, so the KPI and the reflex that writes to `alerts_v2` cannot disagree.
+// The function already applies the trading-hours gate: a silent terminal whose
+// store is closed is NOT dark.
+let as_of = _endTime;
+fn_reflex3_terminal_dark(20, as_of)
+| summarize Value = count()

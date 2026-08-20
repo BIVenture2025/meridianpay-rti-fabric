@@ -1,0 +1,82 @@
+// ============================================================================
+// Project 25 (Meridian Pay) -- Session 4, Phase 3
+// 10_streaming_dedupe_maintenance.kql                    [NEW -- 2026-08-18]
+//
+// Generalizes 08_dedupe_fix.kql into a repeatable MAINTENANCE pass, per the
+// Session 4 decision recorded in OUTCOME_CONTRACT.md's 2026-08-18 addendum:
+// no 4th/5th materialized view for streaming dedupe. Curated-table dedupe
+// stays a periodic operation run at checkpoints, not a schema addition.
+//
+// RUN THIS:
+//   1. Now, before export checkpoint E2 (this session).
+//   2. Again before export checkpoint E3 (Session 6), immediately before the
+//      Direct Lake model / semantic model is built over the mirror -- the
+//      report layer should never read un-deduped data even though the live
+//      dashboards, between runs, do (accepted, ~0.4% inflation, documented).
+//
+// RUN ONE STATEMENT AT A TIME, same as 08_dedupe_fix.kql. Unlike that file,
+// this one does NOT assert an exact expected count -- live-replay volumes
+// change run to run, so STEP 3/8 here print a delta instead of comparing to a
+// frozen number. Read the delta; a huge unexpected delta (not a few hundred
+// rows) is itself worth investigating before swapping in.
+// ============================================================================
+
+// ---- STEP 1: measure before -- how many duplicate keys exist right now ----
+
+auth_curated | summarize c = count() by auth_id | where c > 1 | count
+
+telemetry_curated | summarize c = count() by telemetry_id | where c > 1 | count
+
+// If both return 0, STOP -- nothing to do, do not run the swap steps below.
+
+// ---- STEP 2: dedupe functions (idempotent re-create, same as 08) ----------
+
+.create-or-alter function fn_dedupe_auth() { auth_curated | summarize take_any(*) by auth_id }
+
+.create-or-alter function fn_dedupe_telemetry() { telemetry_curated | summarize take_any(*) by telemetry_id }
+
+// ---- STEP 3: stage, then compare row counts before swapping ---------------
+// If this throws the CapacityPolicy/Ingestion throttle, wait 2-3 minutes and
+// re-run the identical statement -- transient, not a defect (Session 3, C3).
+
+.set-or-replace auth_curated_dedup <| fn_dedupe_auth()
+
+print before = toscalar(auth_curated | count), after = toscalar(auth_curated_dedup | count)
+
+// ---- STEP 4: swap in, reclaim ----------------------------------------------
+
+.set-or-replace auth_curated <| auth_curated_dedup
+
+.drop table auth_curated_dedup
+
+// ---- STEP 5-7: same sequence for telemetry ---------------------------------
+
+.set-or-replace telemetry_curated_dedup <| fn_dedupe_telemetry()
+
+print before = toscalar(telemetry_curated | count), after = toscalar(telemetry_curated_dedup | count)
+
+.set-or-replace telemetry_curated <| telemetry_curated_dedup
+
+.drop table telemetry_curated_dedup
+
+// ---- STEP 8: the independent structural check. Both must return 0. --------
+
+auth_curated | summarize c = count() by auth_id | where c > 1 | count
+
+telemetry_curated | summarize c = count() by telemetry_id | where c > 1 | count
+
+// ---- STEP 9: confirm the update policies survived the extent swap ---------
+
+.show table auth_curated policy update
+
+.show table telemetry_curated policy update
+
+// ============================================================================
+// WHY THIS STAYS A MANUAL/SCHEDULED PASS, NOT A MATERIALIZED VIEW:
+// see OUTCOME_CONTRACT.md, addendum dated 2026-08-18. Short version: Kusto
+// cannot build an MV over another MV, so a dedup MV would not even be able to
+// feed the three existing aggregate MVs (mv_terminal_activity_5min,
+// mv_terminal_last_seen, mv_issuer_baseline) -- the fix has to land in the
+// curated table itself regardless of MV budget, which is what this script
+// does without adding a 4th/5th MV against contract Sec3's committed count.
+// ============================================================================

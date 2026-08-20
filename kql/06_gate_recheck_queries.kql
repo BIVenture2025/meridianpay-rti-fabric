@@ -1,0 +1,63 @@
+// ============================================================================
+// Project 25 (Meridian Pay) -- Session 3, Phase 2
+// 06_gate_recheck_queries.kql
+//
+// Queries to re-check gates C2 and C3 now that the KQL layer exists and the
+// backfill has (or is about to have) loaded. Both gates were left as findings,
+// not passes, at the end of Session 2 (Gate_Check_Results.md) specifically
+// because EH_MeridianPay had zero tables at that point.
+// ============================================================================
+
+// ---- C2: Direct Lake via OneLake availability ------------------------
+// Session 2's finding: OneLake availability needs >=1 KQL table to exist
+// before it can even be exercised (confirmed by the portal). That is now
+// true -- 12 tables exist after 00-03 run. Two things still have to happen,
+// and BOTH are portal actions, not KQL:
+//   1. Per table (start with dim_estate and auth_curated -- the two the
+//      Direct Lake model will actually bind to), toggle "OneLake availability"
+//      ON in the Eventhouse UI (table right-click -> OneLake availability, or
+//      the database-level "Enable OneLake availability" toggle for all
+//      tables at once). This starts the Delta mirror.
+//   2. Wait for the mirror to catch up (materialization lag, typically under
+//      a few minutes for tables this size), then in a NEW semantic model
+//      (Power BI service, "New report" -> "Get data" -> "Fabric Eventhouse")
+//      confirm the Eventhouse's tables are offered as a Direct Lake source.
+//
+// This KQL query does not toggle OneLake availability (that is portal-only,
+// no management command exposes it as of this engine's last confirmed check)
+// -- it only confirms mirroring has actually caught up once the toggle is on,
+// which the earlier finding could not verify because there was nothing to
+// mirror yet. If '.show table <T> details' does not include OneLake/mirroring
+// fields on this cluster, treat that as informational, not a KQL API gap --
+// read the mirroring status from the portal (Eventhouse -> table -> OneLake
+// availability column) instead, and note in Gate_Check_Results.md which
+// route actually worked.
+.show table dim_estate details
+.show table auth_curated details
+
+// ---- C3: Eventhouse idle CU burn, trend not a single reading -----------
+// This gate cannot be exercised in KQL at all -- it is read from the tenant's
+// Microsoft Fabric Capacity Metrics app (Workspaces -> "Microsoft Fabric
+// Ca..." -> Compute page -> Items (14 days) table), per Session 2's method.
+// What changed since Session 2: EH_MeridianPay now has real ingested data
+// (~9.7m rows) and real query load (every function/MV/DQ-rule query above),
+// so this re-check should show non-zero CU for EH_MeridianPay specifically,
+// not just for the unrelated Order Management workspace.
+//
+// Steps (portal, written not automated -- CLAUDE.md cheapest-route rule; the
+// one browser-automation exception in Session 2 was scoped to that gate only
+// and does not carry forward as a standing approval):
+//   1. Open the Microsoft Fabric Capacity Metrics app.
+//   2. Compute page -> filter to Trial-20250909T024501Z-DE5kgPHwekiZZR...
+//      (the user's own trial, confirmed in Session 2's C0 finding).
+//   3. Items (14 days) table -> find EH_MeridianPay and ACT_MeridianPay rows.
+//      If either is still absent, wait for the next metrics refresh (these
+//      typically lag by up to a few hours) and check again -- do not report
+//      absence as a pass on a single reading, per the contract's own rule
+//      that a gate re-read once is a finding, not a pass.
+//   4. Record the CU(s) reading AND its refresh timestamp in
+//      Gate_Check_Results.md's Session 3 section, plus a comparison against
+//      Session 2's shared-capacity baseline (Order Management, ~2.35% avg
+//      utilization / ~1.76M CU-seconds over 14 days) -- the question C3 is
+//      actually answering is whether this project's own load fits comfortably
+//      alongside that baseline, which needs two points on the trend, not one.

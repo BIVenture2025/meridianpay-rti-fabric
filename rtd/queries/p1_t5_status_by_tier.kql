@@ -1,0 +1,11 @@
+// P1 T5 -- Terminal status by merchant tier  [column]
+// dim_estate carries merchant_tier (one row per terminal, denormalized).
+// It deliberately carries NO store_archetype -- the generator never persists one.
+let as_of = _endTime;
+let dark_minutes = 20;
+mv_terminal_last_seen
+| extend minutes_dark = datetime_diff('minute', as_of, trusted_time)
+| extend Status = iff(minutes_dark >= dark_minutes, 'Silent', 'Live')
+| join kind=inner (dim_estate | project terminal_id, merchant_tier) on terminal_id
+| summarize Terminals = count() by merchant_tier, Status
+| order by merchant_tier asc, Status asc

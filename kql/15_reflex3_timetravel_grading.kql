@@ -1,0 +1,281 @@
+// ============================================================================
+// Project 25 (Meridian Pay) -- Session 6
+// 15_reflex3_timetravel_grading.kql                        [NEW -- 2026-08-19]
+//
+// WHY THIS FILE EXISTS
+//
+// Reflex 3 (`terminal_dark`) scored precision 0.000 and recall 0 of 60 in
+// Session 5's grading run. That is not a detector defect and it must not be
+// rendered as one. The cause is structural and Session 4 documented it before
+// Session 5 measured it:
+//
+//   `fn_reflex3_terminal_dark` reads `mv_terminal_last_seen`, an arg_max
+//   materialized view. An arg_max MV holds ONLY each terminal's final row, so
+//   it can answer "who is dark right now" and nothing else. It cannot answer
+//   "was this terminal dark at time T" for any T in the past. Every planted
+//   outage recovers before the backfill ends, so the detector's firings are
+//   pinned to the last minutes of the data -- the one window in which no
+//   planted episode is still open. 0 of 9 matched, and 0 of 60 episodes were
+//   recalled, for that reason alone.
+//
+// `telemetry_curated` keeps full history. A variant reading it directly CAN
+// time-travel, and therefore CAN be graded against the 60 planted outages.
+// That is what this file builds.
+//
+// ---------------------------------------------------------------------------
+// WHAT THIS DOES AND DOES NOT CHANGE
+//
+//   Does NOT touch `mv_terminal_last_seen`.       MV count stays 3.
+//   Does NOT touch `fn_reflex3_terminal_dark`.    The shipped reflex is unchanged.
+//   Does NOT touch the Activator rule.            Reflex count stays 4.
+//   Does NOT create a table.                      Eventhouse table count unchanged.
+//   Does NOT change `alerts`.                     The 186 graded rows stand.
+//
+//   ADDS two functions, both UNCOUNTED helpers, on the same footing as
+//   `fn_alert_grading`, `fn_build_dim_estate` and the `fn_transform_*` policies.
+//   The contract's 12 counted functions are the ones a dashboard, Activator
+//   rule or report calls; nothing calls these but this file. Counted total
+//   stays 12. Recorded here so a later recount does not disagree.
+//
+// ---------------------------------------------------------------------------
+// THE DESIGN, AND THE ONE THING IT DELIBERATELY EXCLUDES
+//
+// A terminal is dark at time T iff T sits inside a heartbeat gap that has
+// already lasted >= dark_minutes. So instead of probing a grid of T values,
+// darkness is computed ONCE as a set of intervals per terminal:
+//
+//     gap  = [previous heartbeat .. next heartbeat]
+//     dark = [previous heartbeat + dark_minutes .. next heartbeat]
+//
+// Every firing is then one (terminal, dark interval) pair, intersected with the
+// store's own trading hours -- a terminal that is silent while its store is
+// shut is closed, not dark, which is the whole point of reflex 3.
+//
+// EXCLUDED, DELIBERATELY: the TAIL gap after each terminal's final heartbeat.
+// That "gap" has no closing heartbeat, so it is unbounded and indistinguishable
+// from "the backfill stopped". It is exactly the right-censoring artefact that
+// produced Session 4's 219 raw flags and Session 5's 9 unmatched rows. Counting
+// it would reproduce the bug this file exists to remove. Excluding it is a
+// declared scope limit, not a silent filter -- Step 4 reads out how many
+// terminals it dropped, so the exclusion is visible as a number.
+//
+// RUN ONE STATEMENT AT A TIME.
+// A multi-`let` function body must be SELECTED BY HAND in this editor -- the
+// Queryset ends a statement at the first `;`, and the first `;` in these bodies
+// is a `let` INSIDE the body (Session 5's KQL environment finding). The
+// select-from/select-to markers below are there for that reason.
+// ============================================================================
+
+
+// ---- STEP 0: preconditions. Read, do not assume. ---------------------------
+
+telemetry_curated | count
+// Expect 4,337,068 (frozen scale, contract Sec5). A materially smaller number
+// means the curated table was stage-replaced and this grading would silently
+// under-count darkness. STOP if it is not this.
+
+ground_truth | where episode_type == 'terminal_dark_outage' | count
+// FLOOR: must be exactly 60. This is the recall denominator. A rule that finds
+// no rows must first prove it read some (CORE_RULES Appendix C 12).
+
+alerts | where reflex_type == 'terminal_dark' | count
+// Expect 9 -- the Session 5 firings that could not be graded. Untouched by this
+// file; kept only so the before/after is readable.
+
+
+// ---- STEP 1: the time-travel detector ------------------------------------
+// >>> SELECT FROM HERE <<<
+.create-or-alter function fn_reflex3_terminal_dark_at(dark_minutes: int = 20, as_of: datetime = datetime(null)) {
+    let ref_time = iff(isnull(as_of), now(), as_of);
+    let gen_dow_now = (toint(dayofweek(ref_time) / 1d) + 6) % 7;
+    let tod_now = ref_time - startofday(ref_time);
+    let open_now = fn_store_open_sessions()
+        | where day_of_week == gen_dow_now
+        | where tod_now between (open_ts .. close_ts)
+        | distinct store_id;
+    telemetry_curated
+    | where trusted_time <= ref_time
+    | summarize last_seen = max(trusted_time) by terminal_id, store_id, merchant_id
+    | where store_id in (open_now)
+    | extend minutes_dark = datetime_diff('minute', ref_time, last_seen)
+    | where minutes_dark >= dark_minutes
+    | project terminal_id, store_id, merchant_id, last_seen, minutes_dark
+}
+// >>> SELECT TO HERE <<<
+//
+// The single line that makes this gradeable is `where trusted_time <= ref_time`
+// BEFORE the max(). `mv_terminal_last_seen` has already collapsed to one row per
+// terminal by the time any query sees it, so no `where` can recover the history.
+//
+// Confirm it took -- a function that failed to create makes every step below
+// fail with a different and more confusing error:
+//   .show functions | where Name == 'fn_reflex3_terminal_dark_at'
+
+
+// ---- STEP 2: the agreement check. Prove the variant is the same detector. --
+// At the backfill boundary the two versions must agree, because at that instant
+// "last heartbeat overall" and "last heartbeat at or before T" are the same row.
+// If they disagree here, the variant has changed the detector's semantics and
+// nothing below is a fair comparison.
+
+fn_reflex3_terminal_dark(20, datetime(2026-08-17 00:35)) | count
+fn_reflex3_terminal_dark_at(20, datetime(2026-08-17 00:35)) | count
+// These two MUST return the same number. This is the positive control: it shows
+// the variant reproduces the shipped detector where the shipped detector is
+// valid, so any difference EARLIER in time is time-travel, not a rewrite.
+
+
+// ---- STEP 3: firings as intervals, graded by time overlap -----------------
+// >>> SELECT FROM HERE <<<
+.create-or-alter function fn_reflex3_grading(dark_minutes: int = 20) {
+    let dm = dark_minutes * 1m;
+    let sessions = materialize(fn_store_open_sessions());
+    let gaps =
+        telemetry_curated
+        | project terminal_id, store_id, merchant_id, trusted_time
+        | summarize ts = make_list(trusted_time) by terminal_id, store_id, merchant_id
+        | mv-apply t = ts to typeof(datetime) on
+          (
+              order by t asc
+              | extend prev_t = prev(t)
+              | where isnotnull(prev_t)
+              | where t - prev_t >= dm
+              | project gap_start = prev_t, gap_end = t
+          )
+        | extend dark_from = gap_start + dm, dark_to = gap_end
+        | where dark_from < dark_to;
+    let firings =
+        gaps
+        | extend dow = (toint(dayofweek(dark_from) / 1d) + 6) % 7
+        | join kind=inner (sessions | project store_id, day_of_week, open_ts, close_ts)
+              on $left.store_id == $right.store_id, $left.dow == $right.day_of_week
+        | extend day0 = startofday(dark_from)
+        | extend trade_from = day0 + open_ts, trade_to = day0 + close_ts
+        | extend win_start = max_of(dark_from, trade_from), win_end = min_of(dark_to, trade_to)
+        | where win_start < win_end
+        | summarize win_start = min(win_start), win_end = max(win_end)
+              by terminal_id, store_id, merchant_id, gap_start, gap_end;
+    let gt =
+        ground_truth
+        | where episode_type == 'terminal_dark_outage'
+        | project episode_id, entity_key = affected_entity_id,
+                  gt_start = window_start, gt_end = window_end;
+    firings
+    | join kind=leftouter (gt) on $left.terminal_id == $right.entity_key
+    | extend hit = isnotempty(episode_id) and gt_start <= win_end and gt_end >= win_start
+    | summarize gt_episode_id = max(iff(hit, episode_id, ''))
+          by terminal_id, store_id, merchant_id, win_start, win_end
+    | extend matched = gt_episode_id != ''
+}
+// >>> SELECT TO HERE <<<
+//
+// Same overlap test as `fn_alert_grading`: two intervals overlap iff EACH starts
+// before the other ends. Writing only half of it is the classic interval bug and
+// it fails quietly, by matching too few.
+//
+// Same `max(iff(hit, episode_id, ''))` idiom as Session 5 rather than
+// `take_anyif`, for the same reason: it is deterministic, and '' loses to any
+// real episode_id.
+//
+// If `make_list` hits a dynamic-value size limit on the widest terminal, use the
+// FALLBACK in Step 6 instead of raising the limit. The fallback answers recall
+// only, and says so.
+
+
+// ---- STEP 4: read it back. Every number, no assumptions. ------------------
+
+fn_reflex3_grading(20) | count
+// Total firings. FLOOR: must be > 0. Zero here means the gap detection found
+// nothing, which against 4.3m heartbeat rows and 60 planted outages would be a
+// bug, not a result.
+
+fn_reflex3_grading(20)
+| summarize firings = count(), matched = countif(matched)
+| extend precision = round(todouble(matched) / todouble(firings), 3)
+// PRECISION for reflex 3, measurable at last.
+
+fn_reflex3_grading(20)
+| where matched
+| summarize episodes_detected = dcount(gt_episode_id)
+| extend episodes_planted = toscalar(ground_truth | where episode_type == 'terminal_dark_outage' | count)
+| extend recall = round(todouble(episodes_detected) / todouble(episodes_planted), 3)
+// RECALL against all 60 planted outages. Reported by reflex type, never by
+// maturity cohort -- a planted episode has no cohort.
+
+telemetry_curated
+| summarize last_hb = max(trusted_time) by terminal_id
+| summarize terminals = count(),
+            tail_open = countif(last_hb < toscalar(telemetry_curated | summarize max(trusted_time)) - 20m)
+// THE DECLARED EXCLUSION, AS A NUMBER. `tail_open` is how many terminals end the
+// backfill inside an unclosed gap -- the right-censored tail this grading drops
+// on purpose. Session 4 read 219 raw flags at the boundary; whatever this
+// returns is the honest size of what was excluded and it belongs in the
+// walkthrough next to the precision figure, not in a footnote.
+
+
+// ---- STEP 5: the control. A precision nobody tried to break is not evidence.
+// Same test Session 5 applied to the other three reflexes: shift every firing
+// window back 180 days and re-match. A matcher that says yes to everything
+// keeps matching; a binding one goes to zero.
+
+let shifted =
+    fn_reflex3_grading(20)
+    | project terminal_id, win_start = win_start - 180d, win_end = win_end - 180d;
+let gt =
+    ground_truth
+    | where episode_type == 'terminal_dark_outage'
+    | project episode_id, entity_key = affected_entity_id, gt_start = window_start, gt_end = window_end;
+shifted
+| join kind=leftouter (gt) on $left.terminal_id == $right.entity_key
+| extend hit = isnotempty(episode_id) and gt_start <= win_end and gt_end >= win_start
+| summarize firings = count(), matched_when_shifted = countif(hit)
+// EXPECT matched_when_shifted == 0. Anything above single digits means the
+// overlap test is not binding and the Step 4 precision must NOT be published.
+
+
+// ---- STEP 6: FALLBACK, if Step 3 fails on dynamic-value limits -------------
+// Recall only, over the 60 affected terminals rather than all 1,500. Cheaper by
+// two orders of magnitude and enough to replace the 0-of-60 row with a real
+// one. It CANNOT produce precision -- it never looks at a terminal that had no
+// planted outage, so it has no false positives to count. Say that on the page
+// if this path is the one that ran.
+//
+//   let dm = 20m;
+//   let dark_eps = ground_truth
+//       | where episode_type == 'terminal_dark_outage'
+//       | project episode_id, terminal_id = affected_entity_id,
+//                 gt_start = window_start, gt_end = window_end;
+//   let hb = telemetry_curated
+//       | where terminal_id in (dark_eps | distinct terminal_id)
+//       | project terminal_id, trusted_time;
+//   dark_eps
+//   | join kind=leftouter (hb) on terminal_id
+//   | summarize hb_inside = countif(trusted_time > gt_start and trusted_time < gt_end)
+//         by episode_id, terminal_id, gt_start, gt_end
+//   | extend detected = hb_inside == 0 and (gt_end - gt_start) >= dm
+//   | summarize episodes_planted = count(), episodes_detected = countif(detected)
+//   | extend recall = round(todouble(episodes_detected) / todouble(episodes_planted), 3)
+//
+// "No heartbeat at all inside a window longer than dark_minutes" is the same
+// condition Step 3 tests, restricted to windows we already know are episodes.
+
+
+// ============================================================================
+// WHAT TO WRITE ON THE ALERT PRECISION PAGE, EITHER WAY
+//
+// If Steps 3-5 run: reflex 3 gets a real precision and a real recall, both
+// labelled "measured with the time-travel variant reading telemetry_curated;
+// the shipped materialized-view detector cannot be graded against a frozen
+// backfill", plus the excluded right-censored tail as a number.
+//
+// If they do not run: the page says "fires correctly, and fired live through
+// Activator into Teams; precision not measurable against a frozen backfill
+// because an arg_max materialized view cannot time-travel" -- and NEVER 0.000
+// with no explanation, and NEVER Session 4's terminal-only match, which answers
+// "did this terminal ever have an outage" rather than "did this alert detect
+// it".
+//
+// The report's Guide page and the Caveats panel on Alert Precision already
+// carry the second wording. Replace it with the first only after Step 5 returns
+// zero.
+// ============================================================================

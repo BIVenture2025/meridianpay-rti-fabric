@@ -1,0 +1,73 @@
+// ============================================================================
+// Project 25 (Meridian Pay) -- Session 3, Phase 2
+// 02_materialized_views.kql               [REV 2 -- 2026-08-18]
+//
+// 3 materialized views -- "the Gold equivalent" (OUTCOME_CONTRACT.md component
+// 3). Continuously updated by the engine; no scheduled job.
+//
+// HOW TO RUN THIS FILE -- DIFFERENT FROM 00/01/03/04.
+// Materialized-view creation is a long-running operation and is NOT reliably
+// batchable inside .execute database script. Run the THREE commands below ONE
+// AT A TIME: click anywhere inside a command and press Run (the Queryset
+// executes the block your cursor sits in, delimited by blank lines), or select
+// just that command's text and press Run.
+//
+// Run AFTER 01_update_policies.kql -- the curated tables must exist first.
+// Creating these on an empty database is instant and correct; they will show
+// 0 rows with IsHealthy=true until the backfill lands, which is expected, not
+// an error.
+// ============================================================================
+
+// ---- MV 1 of 3: mv_issuer_baseline ----------------------------------------
+// Per issuer BIN, per hour: approval rate. Feeds reflex 4 (issuer
+// degradation), which must run series_decompose_anomalies against each
+// issuer's OWN rolling baseline rather than a fixed threshold -- that is an
+// explicit exit criterion, not a stylistic choice.
+.create-or-alter materialized-view mv_issuer_baseline on table auth_curated
+{
+    auth_curated
+    | where event_type == 'auth'
+    | summarize total = count(), approved = countif(auth_result == 'approved')
+        by issuer_bin, hour_bucket = bin(trusted_time, 1h)
+}
+
+// ---- MV 2 of 3: mv_terminal_activity_5min ---------------------------------
+// Per terminal, per 5-minute bucket: volume, decline rate, low-value count,
+// distinct tokens. Feeds reflex 1 (card-testing burst) and the Fraud Watch
+// RTD page. distinct_tokens uses dcount, which is approximate by design --
+// reflex 1 compares it against a count threshold with margin, never for
+// exact-equality logic.
+.create-or-alter materialized-view mv_terminal_activity_5min on table auth_curated
+{
+    auth_curated
+    | where event_type == 'auth'
+    | summarize auth_count = count(),
+                decline_count = countif(auth_result == 'declined'),
+                low_value_count = countif(amount < 5.0),
+                distinct_tokens = dcount(card_token),
+                total_amount = sum(amount)
+        by terminal_id, store_id, merchant_id, bucket_5min = bin(trusted_time, 5m)
+}
+
+// ---- MV 3 of 3: mv_terminal_last_seen -------------------------------------
+// Per terminal, the most recent telemetry row. Feeds reflex 3 (terminal dark)
+// and the Estate Health RTD page. arg_max is the supported MV pattern for
+// "latest row per key".
+.create-or-alter materialized-view mv_terminal_last_seen on table telemetry_curated
+{
+    telemetry_curated
+    | summarize arg_max(trusted_time, event_time, heartbeat_ok, tamper_flag,
+                        battery_pct, signal_strength, store_id, merchant_id)
+        by terminal_id
+}
+
+// ============================================================================
+// Verify -- run each separately, AFTER the backfill has loaded:
+//   .show materialized-views
+//   .show materialized-view mv_issuer_baseline details
+// Expect IsHealthy = true and a non-null LastRun once source rows exist. On an
+// empty database the view reports its Age as the full lookback with no error;
+// that is the empty state, not a fault. Do not record these as healthy without
+// reading the output -- "the command didn't error" is not proof (Skill 8 Step
+// 6, and the P24-carried rule this project inherited).
+// ============================================================================

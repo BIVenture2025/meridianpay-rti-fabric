@@ -1,0 +1,12 @@
+// P1 T3 -- Stores trading  [stat]
+// fn_store_open_sessions() is the single place the HH:MM string -> timespan
+// conversion and the pandas(0=Mon) -> Kusto(0=Sun) day realignment are written
+// down. Never re-derive either here.
+let as_of = _endTime;
+let gen_dow = (toint(dayofweek(as_of) / 1d) + 6) % 7;
+let tod = as_of - startofday(as_of);
+fn_store_open_sessions()
+| where day_of_week == gen_dow
+| where tod between (open_ts .. close_ts)
+| distinct store_id
+| summarize Value = count()

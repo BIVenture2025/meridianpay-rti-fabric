@@ -1,0 +1,9 @@
+// P2 T3 -- Reflex 1 firings  [stat]
+// Reads the persisted `alerts_v2` table, per the implementation guide -- the RTD
+// tile and the E2 evidence export therefore cannot drift apart.
+// Filtered on window_start (when the burst happened), not fired_at: every
+// backfill-seeded row carries the same constant fired_at stamp.
+alerts_v2
+| where reflex_type == 'card_testing_burst'
+| where window_start between (_startTime .. _endTime)
+| summarize Value = count()

@@ -1,0 +1,50 @@
+// P1 T0 -- Estate Health KPI row  [multistat]
+//
+// WHY ONE TILE INSTEAD OF FOUR. The import rendered but the four `stat` tiles
+// errored with "Current tile size (4, 4) is smaller than the minimum supported
+// tile size (9, 7)". On a 16-column grid a 9-wide minimum means at most ONE stat
+// per row -- four of them would cost 28 rows of vertical space for four numbers.
+// `multistat` is the visual designed for exactly this: several values in a grid
+// of slots, from one query, in one tile. Four KPIs, one 16x7 tile.
+//
+// Every branch must project the SAME two columns for the union to be well-typed,
+// and every Value is todouble() so a count and a percentile can share a column.
+let as_of = _endTime;
+let dark_minutes = 20;
+let gen_dow = (toint(dayofweek(as_of) / 1d) + 6) % 7;
+let tod = as_of - startofday(as_of);
+let open_now = materialize(
+    fn_store_open_sessions()
+    | where day_of_week == gen_dow
+    | where tod between (open_ts .. close_ts)
+    | distinct store_id);
+union
+  // "Terminals reporting", NOT "terminals live". The first build asked
+  // mv_terminal_last_seen for terminals seen within the last 20 minutes and
+  // rendered **2 of 1,500** at the 00:35 reference time -- technically correct and
+  // badly misleading. Every terminal's final backfill ping lands between 23:45 and
+  // 00:20:23, so a 20-minute recency test is only meaningful within 20 minutes of
+  // the data's true last ingest; a minute later it collapses to near zero.
+  // Distinct terminals with ANY telemetry in the reference window is well-defined
+  // for any window the operator picks. Paired with "Dark right now" it tells the
+  // real story: 1,500 reporting, N currently overdue during trading hours.
+  (telemetry_curated
+   | where trusted_time between (_startTime .. as_of)
+   | summarize Value = todouble(dcount(terminal_id))
+   | extend ord = 1, Metric = 'Terminals reporting'
+   | project ord, Metric, Value),
+  (fn_reflex3_terminal_dark(20, as_of)
+   | summarize Value = todouble(count())
+   | extend ord = 2, Metric = 'Dark right now'
+   | project ord, Metric, Value),
+  (open_now
+   | summarize Value = todouble(count())
+   | extend ord = 3, Metric = 'Stores trading'
+   | project ord, Metric, Value),
+  (telemetry_curated
+   | where trusted_time between (_startTime .. as_of)
+   | summarize Value = round(percentile(clock_skew_seconds, 95), 1)
+   | extend ord = 4, Metric = 'Ingest lag p95 (s)'
+   | project ord, Metric, Value)
+| order by ord asc
+| project Metric, Value

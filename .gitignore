@@ -1,0 +1,14 @@
+# generated output - the generator is here, its 650 MB of Parquet is not
+output/
+output_run*/
+*.parquet
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# os / editor
+.DS_Store
+Thumbs.db
+.vscode/

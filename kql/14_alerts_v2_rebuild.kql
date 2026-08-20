@@ -1,0 +1,157 @@
+// ============================================================================
+// Project 25 (Meridian Pay) -- Session 5
+// 14_alerts_v2_rebuild.kql                                 [NEW -- 2026-08-19]
+//
+// WHAT WE NOW KNOW, and it rules out the cheap explanations.
+//
+//   * `alerts` in KQL          -> 186 rows
+//   * `alerts` in the Lakehouse -> 15 columns, 0 rows
+//   * `alerts_probe`, a BRAND-NEW shortcut to the same Eventhouse table,
+//     created after the fault -> 15 columns, **0 rows**
+//   * `dispute_curated`, `dim_estate`, same Lakehouse, same mirror -> data
+//
+// A fresh shortcut reading zero proves the shortcut object was never at fault.
+// The mirrored Delta for THIS TABLE is empty, while its schema is current and
+// its neighbours are healthy. The mirror also reports itself finished --
+// 19/19 tables, 100% complete, 0B pending -- so it is not going to fix itself.
+//
+// `.clear table alerts data` is refused (InvalidExtentsOperationException), so
+// the table cannot be emptied and refilled in place.
+//
+// ---------------------------------------------------------------------------
+// THE APPROACH: build a NEW table, and prove it mirrors, BEFORE touching
+// anything that works.
+//
+// Step 1-3 below are entirely additive. They create `alerts_v2`, ingest the 186
+// graded rows into it as a genuine ingestion, and stop. Nothing existing is
+// modified, nothing is dropped, and `alerts` keeps its 186 rows throughout.
+//
+// **Step 3 is a hard stop.** Do not continue past it until the Lakehouse has been
+// read. What that reading says decides which of two very different situations
+// this is:
+//
+//   A. `alerts_v2` mirrors with 186 rows
+//      -> ingestion into a new table works. The endgame is Step 4: point a
+//         shortcut NAMED `alerts` at the SOURCE TABLE `alerts_v2`. A shortcut's
+//         name is independent of its source, so the semantic model and all 24
+//         measures keep working against `alerts` with no DAX changes, no table
+//         renames, and no risk to the original.
+//
+//   B. `alerts_v2` ALSO mirrors zero rows
+//      -> the problem is not this table, it is that the mirror has stopped
+//         accepting new work for this database since availability was enabled.
+//         That is a much bigger finding and the fix is a different one --
+//         toggling OneLake availability off and on to force a full re-mirror.
+//         Do NOT do that on a hunch; report the result first.
+//
+// RUN ONE STATEMENT AT A TIME.
+// ============================================================================
+
+
+// ---- STEP 0: confirm the inputs are still there ----------------------------
+
+alerts_regrade_snapshot | count
+// MUST be 186. This is one of only two copies of the graded rows.
+
+alerts | count
+// Expect 186 as well. Untouched by this file.
+
+
+// ---- STEP 1: create the new table, same 15-column schema -------------------
+// Column list and order match `alerts` exactly, including the two grading
+// columns 12_alert_grading.kql added. If this errors on a schema mismatch at
+// step 2, read `.show table alerts schema as json` and reconcile -- do not guess.
+
+.create table alerts_v2 (
+    alert_id: string,
+    fired_at: datetime,
+    reflex_type: string,
+    entity_type: string,
+    entity_id: string,
+    merchant_id: string,
+    store_id: string,
+    window_start: datetime,
+    window_end: datetime,
+    signal_value: real,
+    threshold_value: real,
+    evidence: dynamic,
+    maturity_cohort: string,
+    gt_episode_id: string,
+    dispute_confirmed: bool
+)
+
+
+// ---- STEP 2: ingest the graded rows ----------------------------------------
+// `.set-or-append` into an empty, newly created table is the plainest ingestion
+// this engine has. If OneLake availability mirrors anything, it mirrors this.
+
+.set-or-append alerts_v2 <| alerts_regrade_snapshot
+
+alerts_v2 | count
+// MUST be 186.
+
+alerts_v2
+| summarize firings = count(), graded = countif(gt_episode_id != ''),
+            disputed = countif(dispute_confirmed)
+    by reflex_type
+| order by reflex_type asc
+// Must reproduce the grading exactly: 72/72/31, 95/2/0, 10/10/0, 9/0/0.
+// If it does not, the copy is wrong and nothing below should run.
+
+
+// ---- STEP 3: HARD STOP. Read the Lakehouse before continuing. -------------
+//
+// Wait a few minutes, then in LH_MeridianPay create a shortcut to `alerts_v2`
+// (name it `alerts_v2`, temporarily) and read its row count. Or watch
+// EH_MeridianPay -> Database details -> OneLake and confirm Tables available
+// moves from 19/19 to 20/20.
+//
+//   * 186 rows  -> situation A. Continue to step 4.
+//   * 0 rows    -> situation B. STOP and report. Do not run step 4; it would
+//                  leave two empty tables instead of one and tell us nothing new.
+//
+// This gate exists because the same reading has now been misinterpreted twice in
+// one session -- first as a sync lag, then as a stale shortcut. Both were wrong,
+// and both times the evidence that settled it was a row count read at the far
+// end rather than in KQL. Read it again here before acting again.
+
+
+// ---- STEP 4: SITUATION A ONLY -- repoint the shortcut ----------------------
+// No KQL commands. Done entirely in LH_MeridianPay:
+//
+//   1. Delete the shortcut `alerts`      (a pointer, not data)
+//   2. Delete the shortcut `alerts_probe` (the diagnostic, no longer needed)
+//   3. Delete the temporary `alerts_v2` shortcut from step 3, if created
+//   4. New shortcut -> OneLake -> EH_MeridianPay -> table **alerts_v2**,
+//      and in the Shortcut Name column type **alerts**
+//
+// Step 4.4 is the whole trick: a shortcut's NAME is independent of its SOURCE.
+// The Lakehouse, the SQL endpoint, the semantic model and all 24 measures keep
+// seeing a table called `alerts`, so nothing downstream changes -- no DAX edits,
+// no table renames in Kusto, and the original `alerts` stays untouched as a
+// fallback.
+//
+//   5. Verify in the SQL endpoint:  SELECT COUNT(*) FROM dbo.alerts;  -> 186
+//   6. SM_MeridianPay_DirectLake -> Edit tables -> untick `alerts` -> OK ->
+//      Edit tables -> tick `alerts` -> OK
+//   7. Re-run 04_Model/P25_measures_define.dax
+
+
+// ---- STEP 5: cleanup, only after step 4.5 reads 186 ------------------------
+// Deliberately NOT run today. Leave both tables in place until Session 6 has
+// built and screenshotted the Alert Precision page -- `alerts` and
+// `alerts_regrade_snapshot` are the fallbacks if anything above turns out to be
+// wrong, and they cost nothing but a name in the table list.
+//
+//   .drop table alerts
+//   .drop table alerts_regrade_snapshot
+//   .rename tables alerts = alerts_v2
+//
+// CONTRACT NOTE. Sec3 commits to 12 Eventhouse KQL tables. Today the database
+// holds `alerts`, `alerts_v2` and `alerts_regrade_snapshot` where it should hold
+// one -- 19 tables in the list against 12 counted. That is a WORKING state, not
+// a contract change, in the same way the four `stg_dim_*` and two `*_cold`
+// tables have always been working tables on top of the counted 12. The cleanup
+// above returns it to exactly 12 and MUST be run before E3, or the export
+// checkpoint captures a table list that contradicts the contract's own number.
+// ============================================================================

@@ -1,0 +1,372 @@
+{
+  "$schema": "https://pbiadx.powerbi.com/static/d/schema/78/dashboard.json",
+  "id": "acb82bc8-e74b-4596-915e-169e0a4ee99f",
+  "schema_version": 78,
+  "title": "Meridian Pay — Real-Time Payments Risk",
+  "tiles": [
+    {
+      "id": "64ed0736-5ca1-5bb7-9501-c657dc1be1cb",
+      "pageId": "0b151dca-2741-5a64-b80a-d68e22874b9a",
+      "title": "Estate at a glance — Live / dark / trading / freshness, at the reference time",
+      "visualType": "multistat",
+      "layout": {
+        "x": 0,
+        "y": 0,
+        "width": 16,
+        "height": 7
+      },
+      "visualOptions": {},
+      "queryRef": {
+        "kind": "query",
+        "queryId": "66a25ca3-d060-533c-8721-56774843ea2b"
+      }
+    },
+    {
+      "id": "eccc90c6-12bb-5f3b-a4e3-5dc74e9623e6",
+      "pageId": "0b151dca-2741-5a64-b80a-d68e22874b9a",
+      "title": "Terminal status by merchant tier — Where the estate's silence concentrates, tier by tier",
+      "visualType": "column",
+      "layout": {
+        "x": 0,
+        "y": 7,
+        "width": 8,
+        "height": 7
+      },
+      "visualOptions": {},
+      "queryRef": {
+        "kind": "query",
+        "queryId": "f0429477-dfc2-5d93-8502-96a0f7ff567f"
+      }
+    },
+    {
+      "id": "2bfa837f-1a7e-5d2d-8b63-f4beadcdac1e",
+      "pageId": "0b151dca-2741-5a64-b80a-d68e22874b9a",
+      "title": "Estate composition — Off-hours silence is not an outage -- only silence during trading hours counts",
+      "visualType": "pie",
+      "layout": {
+        "x": 8,
+        "y": 7,
+        "width": 8,
+        "height": 7
+      },
+      "visualOptions": {},
+      "queryRef": {
+        "kind": "query",
+        "queryId": "b91f9d2e-f6d5-5465-9533-d7fbb8043582"
+      }
+    },
+    {
+      "id": "c3aa083c-2abf-5e7d-ac9b-309512503726",
+      "pageId": "0b151dca-2741-5a64-b80a-d68e22874b9a",
+      "title": "Reflex 3 -- terminal dark, live feed — Revenue loss, not fraud. Ordered by how long the terminal has been silent",
+      "visualType": "table",
+      "layout": {
+        "x": 0,
+        "y": 14,
+        "width": 16,
+        "height": 8
+      },
+      "visualOptions": {},
+      "queryRef": {
+        "kind": "query",
+        "queryId": "8c5979ee-80a3-522b-a6f2-dff37c103fa5"
+      }
+    },
+    {
+      "id": "a3e0baa2-86ac-55b5-81ea-d89cf4072b7e",
+      "pageId": "ce8b8a48-1f46-5eff-9dd7-ab85f18c58e9",
+      "title": "Hot path at a glance — Throughput, decline rate and reflex firings in the reference window",
+      "visualType": "multistat",
+      "layout": {
+        "x": 0,
+        "y": 0,
+        "width": 16,
+        "height": 7
+      },
+      "visualOptions": {},
+      "queryRef": {
+        "kind": "query",
+        "queryId": "8c678cf7-4cb6-52bb-bd52-b5f9c7dda94f"
+      }
+    },
+    {
+      "id": "00c54d30-14c1-5b25-8ff8-da9087bfa626",
+      "pageId": "ce8b8a48-1f46-5eff-9dd7-ab85f18c58e9",
+      "title": "Decline rate, trailing window — 5-minute grain -- the grain mv_terminal_activity_5min actually holds",
+      "visualType": "timechart",
+      "layout": {
+        "x": 0,
+        "y": 7,
+        "width": 16,
+        "height": 7
+      },
+      "visualOptions": {},
+      "queryRef": {
+        "kind": "query",
+        "queryId": "bbcbd7bf-e92d-5059-8ae9-b85695261bd6"
+      }
+    },
+    {
+      "id": "9f28fac6-c6ec-5f9b-b1cb-6b535ad59b18",
+      "pageId": "ce8b8a48-1f46-5eff-9dd7-ab85f18c58e9",
+      "title": "Top at-risk terminals — Minimum 20 auths, so a 1-of-1 decline cannot take the top slot",
+      "visualType": "bar",
+      "layout": {
+        "x": 0,
+        "y": 14,
+        "width": 16,
+        "height": 7
+      },
+      "visualOptions": {},
+      "queryRef": {
+        "kind": "query",
+        "queryId": "444eb746-a6c5-5fbd-8575-cbd843532681"
+      }
+    },
+    {
+      "id": "e0388602-b245-50e5-b13f-a6e18b4a6b07",
+      "pageId": "ce8b8a48-1f46-5eff-9dd7-ab85f18c58e9",
+      "title": "Live alert feed — Reads the persisted alerts_v2 table -- the same rows Session 6 grades",
+      "visualType": "table",
+      "layout": {
+        "x": 0,
+        "y": 21,
+        "width": 16,
+        "height": 8
+      },
+      "visualOptions": {},
+      "queryRef": {
+        "kind": "query",
+        "queryId": "b4e8ef60-0944-53c5-83fe-b3e8919fd051"
+      }
+    },
+    {
+      "id": "2f1c2dcf-ee77-53db-a7ef-7dd2fddd1af1",
+      "pageId": "f48770fa-6e75-5992-8aec-96ee40e6d971",
+      "title": "Approval rate by issuer, with anomaly band — series_decompose_anomalies against each issuer's own baseline -- not a fixed threshold",
+      "visualType": "anomalychart",
+      "layout": {
+        "x": 0,
+        "y": 0,
+        "width": 16,
+        "height": 9
+      },
+      "visualOptions": {},
+      "queryRef": {
+        "kind": "query",
+        "queryId": "c4885889-cf68-5c99-bb87-f85ae03506c9"
+      }
+    },
+    {
+      "id": "5abfce89-d909-5623-87fd-b36c5ba180ab",
+      "pageId": "f48770fa-6e75-5992-8aec-96ee40e6d971",
+      "title": "Issuer BIN health by hour of day — Degradation clusters by hour, it does not scatter",
+      "visualType": "heatmap",
+      "layout": {
+        "x": 0,
+        "y": 9,
+        "width": 16,
+        "height": 8
+      },
+      "visualOptions": {},
+      "queryRef": {
+        "kind": "query",
+        "queryId": "ed950ac9-17ce-5a4a-8f58-381bde193a97"
+      }
+    },
+    {
+      "id": "d30b3351-70ed-5614-8184-5d4b5a2cca27",
+      "pageId": "f48770fa-6e75-5992-8aec-96ee40e6d971",
+      "title": "Reflex 4 firings -- issuer_degradation — Each row is one hour an issuer fell below its own decomposed baseline",
+      "visualType": "table",
+      "layout": {
+        "x": 0,
+        "y": 17,
+        "width": 16,
+        "height": 8
+      },
+      "visualOptions": {},
+      "queryRef": {
+        "kind": "query",
+        "queryId": "f44b9d5d-ce61-597a-9f2d-0249d1b6d447"
+      }
+    }
+  ],
+  "baseQueries": [],
+  "parameters": [
+    {
+      "kind": "duration",
+      "id": "40ce9361-3b12-4f40-bb33-f0427b4ad906",
+      "displayName": "Reference window",
+      "description": "",
+      "beginVariableName": "_startTime",
+      "endVariableName": "_endTime",
+      "defaultValue": {
+        "kind": "fixed",
+        "start": 1786838400000,
+        "end": 1786926900000
+      },
+      "showOnPages": {
+        "kind": "all"
+      }
+    }
+  ],
+  "dataSources": [
+    {
+      "kind": "kusto-trident",
+      "clusterUri": "https://trd-9xa9cvrap2m52p7zjw.z4.kusto.fabric.microsoft.com",
+      "name": "EH_MeridianPay",
+      "databaseArtifactId": "c3d516c2-bbcf-4c9c-bea6-38e5e39688be",
+      "database": "c3d516c2-bbcf-4c9c-bea6-38e5e39688be",
+      "workspace": "00000000-0000-0000-0000-000000000000",
+      "id": "ed569f91-a184-46ac-a4eb-6dc67687603f"
+    }
+  ],
+  "pages": [
+    {
+      "id": "0b151dca-2741-5a64-b80a-d68e22874b9a",
+      "name": "Estate Health"
+    },
+    {
+      "id": "ce8b8a48-1f46-5eff-9dd7-ab85f18c58e9",
+      "name": "Fraud Watch"
+    },
+    {
+      "id": "f48770fa-6e75-5992-8aec-96ee40e6d971",
+      "name": "Issuer Performance"
+    }
+  ],
+  "queries": [
+    {
+      "id": "66a25ca3-d060-533c-8721-56774843ea2b",
+      "text": "// P1 T0 -- Estate Health KPI row  [multistat]\n//\n// WHY ONE TILE INSTEAD OF FOUR. The import rendered but the four `stat` tiles\n// errored with \"Current tile size (4, 4) is smaller than the minimum supported\n// tile size (9, 7)\". On a 16-column grid a 9-wide minimum means at most ONE stat\n// per row -- four of them would cost 28 rows of vertical space for four numbers.\n// `multistat` is the visual designed for exactly this: several values in a grid\n// of slots, from one query, in one tile. Four KPIs, one 16x7 tile.\n//\n// Every branch must project the SAME two columns for the union to be well-typed,\n// and every Value is todouble() so a count and a percentile can share a column.\nlet as_of = _endTime;\nlet dark_minutes = 20;\nlet gen_dow = (toint(dayofweek(as_of) / 1d) + 6) % 7;\nlet tod = as_of - startofday(as_of);\nlet open_now = materialize(\n    fn_store_open_sessions()\n    | where day_of_week == gen_dow\n    | where tod between (open_ts .. close_ts)\n    | distinct store_id);\nunion\n  // \"Terminals reporting\", NOT \"terminals live\". The first build asked\n  // mv_terminal_last_seen for terminals seen within the last 20 minutes and\n  // rendered **2 of 1,500** at the 00:35 reference time -- technically correct and\n  // badly misleading. Every terminal's final backfill ping lands between 23:45 and\n  // 00:20:23, so a 20-minute recency test is only meaningful within 20 minutes of\n  // the data's true last ingest; a minute later it collapses to near zero.\n  // Distinct terminals with ANY telemetry in the reference window is well-defined\n  // for any window the operator picks. Paired with \"Dark right now\" it tells the\n  // real story: 1,500 reporting, N currently overdue during trading hours.\n  (telemetry_curated\n   | where trusted_time between (_startTime .. as_of)\n   | summarize Value = todouble(dcount(terminal_id))\n   | extend ord = 1, Metric = 'Terminals reporting'\n   | project ord, Metric, Value),\n  (fn_reflex3_terminal_dark(20, as_of)\n   | summarize Value = todouble(count())\n   | extend ord = 2, Metric = 'Dark right now'\n   | project ord, Metric, Value),\n  (open_now\n   | summarize Value = todouble(count())\n   | extend ord = 3, Metric = 'Stores trading'\n   | project ord, Metric, Value),\n  (telemetry_curated\n   | where trusted_time between (_startTime .. as_of)\n   | summarize Value = round(percentile(clock_skew_seconds, 95), 1)\n   | extend ord = 4, Metric = 'Ingest lag p95 (s)'\n   | project ord, Metric, Value)\n| order by ord asc\n| project Metric, Value\n",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "ed569f91-a184-46ac-a4eb-6dc67687603f"
+      },
+      "usedVariables": [
+        "_endTime",
+        "_startTime"
+      ]
+    },
+    {
+      "id": "f0429477-dfc2-5d93-8502-96a0f7ff567f",
+      "text": "// P1 T5 -- Terminal status by merchant tier  [column]\n// dim_estate carries merchant_tier (one row per terminal, denormalized).\n// It deliberately carries NO store_archetype -- the generator never persists one.\nlet as_of = _endTime;\nlet dark_minutes = 20;\nmv_terminal_last_seen\n| extend minutes_dark = datetime_diff('minute', as_of, trusted_time)\n| extend Status = iff(minutes_dark >= dark_minutes, 'Silent', 'Live')\n| join kind=inner (dim_estate | project terminal_id, merchant_tier) on terminal_id\n| summarize Terminals = count() by merchant_tier, Status\n| order by merchant_tier asc, Status asc\n",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "ed569f91-a184-46ac-a4eb-6dc67687603f"
+      },
+      "usedVariables": [
+        "_endTime"
+      ]
+    },
+    {
+      "id": "b91f9d2e-f6d5-5465-9533-d7fbb8043582",
+      "text": "// P1 T6 -- Estate composition  [pie]\n// Three buckets, matching the mockup. The distinction that matters: a silent\n// terminal whose store is CLOSED is \"Live, off-hours\", not \"Dark\" -- that is\n// reflex 3's own definition, and reporting it any other way would inflate the\n// outage count every night.\nlet as_of = _endTime;\nlet dark_minutes = 20;\nlet gen_dow = (toint(dayofweek(as_of) / 1d) + 6) % 7;\nlet tod = as_of - startofday(as_of);\nlet open_now = fn_store_open_sessions()\n    | where day_of_week == gen_dow\n    | where tod between (open_ts .. close_ts)\n    | distinct store_id;\nmv_terminal_last_seen\n| extend minutes_dark = datetime_diff('minute', as_of, trusted_time)\n| extend trading = store_id in (open_now)\n| extend Bucket = case(\n    trading and minutes_dark >= dark_minutes, 'Dark / overdue',\n    trading, 'Live & trading',\n    'Live, off-hours')\n| summarize Terminals = count() by Bucket\n| order by Terminals desc\n",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "ed569f91-a184-46ac-a4eb-6dc67687603f"
+      },
+      "usedVariables": [
+        "_endTime"
+      ]
+    },
+    {
+      "id": "8c5979ee-80a3-522b-a6f2-dff37c103fa5",
+      "text": "// P1 T7 -- Reflex 3 terminal-dark feed  [table]\n// NOTE, recorded rather than quietly substituted: the mockup shows merchant\n// display names (\"Nasi Kandar Meridian\"). The generator persists no merchant\n// name -- stg_dim_merchant is (merchant_id, merchant_tier, mcc, mcc_description).\n// mcc_description is the closest real attribute and is used instead.\nlet as_of = _endTime;\nfn_reflex3_terminal_dark(20, as_of)\n| join kind=leftouter (dim_estate | project terminal_id, merchant_tier, mcc_description) on terminal_id\n| project Terminal = terminal_id,\n          Store = store_id,\n          Merchant = merchant_id,\n          Tier = merchant_tier,\n          Trade = mcc_description,\n          ['Last seen'] = last_seen,\n          ['Dark for (min)'] = minutes_dark\n| order by ['Dark for (min)'] desc\n| take 200\n",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "ed569f91-a184-46ac-a4eb-6dc67687603f"
+      },
+      "usedVariables": [
+        "_endTime"
+      ]
+    },
+    {
+      "id": "8c678cf7-4cb6-52bb-bd52-b5f9c7dda94f",
+      "text": "// P2 T0 -- Fraud Watch KPI row  [multistat]\n// Same consolidation as page 1's KPI row, and for the same reason -- see that\n// file's header for the minimum-tile-size finding.\n//\n// The two rate KPIs read a single materialized 15-minute slice, so \"auths/sec\"\n// and \"decline rate now\" cannot be computed over different populations. The two\n// firing counts read the persisted `alerts_v2` table, per the implementation guide,\n// so this page and the exported E2 evidence cannot disagree.\n// ROUNDING, corrected 2026-08-19. One decimal place renders ANY window holding fewer than\n// 45 auths in 15 minutes as '0.0' -- indistinguishable from a broken tile. The reference\n// window's quiet 15 minutes is exactly that case, and it was read as an empty tile before\n// the arithmetic was checked. Two decimals; the honest small number, not a zero.\nlet as_of = _endTime;\nlet win = 15m;\nlet recent = materialize(\n    auth_curated\n    | where event_type == 'auth'\n    | where trusted_time between (as_of - win .. as_of));\nunion\n  (recent\n   | summarize c = count()\n   | extend ord = 1, Metric = 'Auths / sec', Value = round(todouble(c) / 900.0, 2)\n   | project ord, Metric, Value),\n  (recent\n   | summarize d = countif(auth_result == 'declined'), t = count()\n   | extend ord = 2, Metric = 'Decline rate now (%)',\n            Value = round(100.0 * todouble(d) / todouble(max_of(t, 1)), 1)\n   | project ord, Metric, Value),\n  (alerts_v2\n   | where reflex_type == 'card_testing_burst'\n   | where window_start between (_startTime .. _endTime)\n   | summarize Value = todouble(count())\n   | extend ord = 3, Metric = 'Reflex 1 firings'\n   | project ord, Metric, Value),\n  (alerts_v2\n   | where reflex_type == 'terminal_compromise'\n   | where window_start between (_startTime .. _endTime)\n   | summarize Value = todouble(count())\n   | extend ord = 4, Metric = 'Reflex 2 firings'\n   | project ord, Metric, Value)\n| order by ord asc\n| project Metric, Value\n",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "ed569f91-a184-46ac-a4eb-6dc67687603f"
+      },
+      "usedVariables": [
+        "_endTime",
+        "_startTime"
+      ]
+    },
+    {
+      "id": "bbcbd7bf-e92d-5059-8ae9-b85695261bd6",
+      "text": "// P2 T5 -- Decline rate, trailing window  [line]\n// CORRECTION to the implementation guide, recorded not silently applied: the\n// guide asks for 1-minute grain from mv_terminal_activity_5min. That MV buckets\n// at 5 minutes -- 1-minute grain cannot be recovered from it. Reading\n// auth_curated directly would give 1-minute grain but discards the MV, which\n// exists precisely so this page is cheap. The MV is used at its true grain.\nmv_terminal_activity_5min\n| where bucket_5min between (_startTime .. _endTime)\n| summarize auths = sum(auth_count), declines = sum(decline_count) by bucket_5min\n| where auths > 0\n| project bucket_5min, ['Decline rate %'] = round(100.0 * todouble(declines) / todouble(auths), 2)\n| order by bucket_5min asc\n",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "ed569f91-a184-46ac-a4eb-6dc67687603f"
+      },
+      "usedVariables": [
+        "_endTime",
+        "_startTime"
+      ]
+    },
+    {
+      "id": "444eb746-a6c5-5fbd-8575-cbd843532681",
+      "text": "// P2 T6 -- Top at-risk terminals  [bar]\n// Ranked on decline rate over the reference window, with a 20-auth floor so a\n// terminal that declined its only transaction cannot take the top slot -- the\n// small-denominator trap that makes most \"top N by rate\" visuals meaningless.\nmv_terminal_activity_5min\n| where bucket_5min between (_startTime .. _endTime)\n| summarize auths = sum(auth_count), declines = sum(decline_count) by terminal_id\n| where auths >= 20\n| extend ['Decline rate'] = round(todouble(declines) / todouble(auths), 3)\n| top 10 by ['Decline rate'] desc\n| project terminal_id, ['Decline rate']\n",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "ed569f91-a184-46ac-a4eb-6dc67687603f"
+      },
+      "usedVariables": [
+        "_endTime",
+        "_startTime"
+      ]
+    },
+    {
+      "id": "b4e8ef60-0944-53c5-83fe-b3e8919fd051",
+      "text": "// P2 T7 -- Live alert feed  [table]\n// Ordered by window_start, deliberately. The implementation guide says \"sorted\n// desc by fired_at\"; every backfill-seeded row in `alerts_v2` carries the identical\n// constant fired_at = datetime(2026-08-17) written by\n// 11_activator_reflex_alerts.kql, so fired_at cannot order anything. window_start\n// is when the signal actually occurred. Recorded in Gate_Check_Results.md.\nalerts_v2\n| where reflex_type in ('card_testing_burst', 'terminal_compromise')\n| where window_start between (_startTime .. _endTime)\n| order by window_start desc\n| project Signalled = window_start,\n          Reflex = reflex_type,\n          Terminal = entity_id,\n          Store = store_id,\n          Merchant = merchant_id,\n          Signal = round(signal_value, 3),\n          Threshold = round(threshold_value, 3),\n          Cohort = maturity_cohort\n| take 200\n",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "ed569f91-a184-46ac-a4eb-6dc67687603f"
+      },
+      "usedVariables": [
+        "_endTime",
+        "_startTime"
+      ]
+    },
+    {
+      "id": "c4885889-cf68-5c99-bb87-f85ae03506c9",
+      "text": "// P3 T1 -- Approval rate by issuer, with anomaly band  [anomalychart]\n// The exit-criterion tile: reflex 4 must decompose each issuer against ITS OWN\n// baseline, not a fixed threshold. sigma = 2.5 and step = 1h are the same\n// parameters fn_reflex4_issuer_degradation uses, so this chart and the reflex\n// that writes to `alerts_v2` cannot drift apart.\n// default = double(null) leaves an hour with no traffic as a GAP, not as a 0%\n// approval rate -- a zero here would be a fabricated outage.\nlet as_of = _endTime;\nlet win_start = _startTime;\nmv_issuer_baseline\n| where hour_bucket between (win_start .. as_of)\n| extend approval_rate = todouble(approved) / todouble(max_of(total, 1))\n| make-series ApprovalRate = avg(approval_rate) default = double(null)\n    on hour_bucket from win_start to as_of step 1h by issuer_bin\n| extend (anomalies, score, baseline) = series_decompose_anomalies(ApprovalRate, 2.5)\n| project issuer_bin, hour_bucket, ApprovalRate, baseline, anomalies\n",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "ed569f91-a184-46ac-a4eb-6dc67687603f"
+      },
+      "usedVariables": [
+        "_endTime",
+        "_startTime"
+      ]
+    },
+    {
+      "id": "ed950ac9-17ce-5a4a-8f58-381bde193a97",
+      "text": "// P3 T2 -- Issuer BIN health by hour of day  [heatmap]\n// Column types are deliberate. The RTD heatmap requires three columns and, when\n// x is a string, y must also be a string -- so hour-of-day is emitted as a\n// zero-padded \"HH:00\" label rather than an int. Value is the numeric field.\nmv_issuer_baseline\n| where hour_bucket between (_startTime .. _endTime)\n| extend hod = hourofday(hour_bucket)\n| summarize approved_sum = sum(approved), total_sum = sum(total) by issuer_bin, hod\n| where total_sum > 0\n| project ['Issuer BIN'] = issuer_bin,\n          ['Hour'] = strcat(iff(hod < 10, '0', ''), tostring(hod), ':00'),\n          ['Approval %'] = round(100.0 * todouble(approved_sum) / todouble(total_sum), 1)\n| order by ['Issuer BIN'] asc, ['Hour'] asc\n",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "ed569f91-a184-46ac-a4eb-6dc67687603f"
+      },
+      "usedVariables": [
+        "_endTime",
+        "_startTime"
+      ]
+    },
+    {
+      "id": "f44b9d5d-ce61-597a-9f2d-0249d1b6d447",
+      "text": "// P3 T3 -- Reflex 4 firings, issuer_degradation  [table]\n// Reflex 4 rows are the one reflex_type where entity_type is 'issuer' and\n// merchant_id / store_id are deliberately empty strings -- no single merchant\n// owns an issuer. entity_id carries the issuer_bin, joined here to\n// stg_dim_issuer for a readable name.\nalerts_v2\n| where reflex_type == 'issuer_degradation'\n| where window_start between (_startTime .. _endTime)\n| join kind=leftouter (stg_dim_issuer | project issuer_bin, issuer_name)\n    on $left.entity_id == $right.issuer_bin\n| order by window_start desc\n| project ['Issuer BIN'] = entity_id,\n          Issuer = issuer_name,\n          Hour = window_start,\n          ['Approval rate'] = round(signal_value, 3),\n          ['Own baseline'] = round(threshold_value, 3),\n          ['Shortfall'] = round(threshold_value - signal_value, 3)\n| take 200\n",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "ed569f91-a184-46ac-a4eb-6dc67687603f"
+      },
+      "usedVariables": [
+        "_endTime",
+        "_startTime"
+      ]
+    }
+  ],
+  "eTag": "\"6183a87d23f84d9ea7eed2c02c2e182d\"",
+  "embeddedApps": []
+}

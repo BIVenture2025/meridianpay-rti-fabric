@@ -1,0 +1,12 @@
+// P2 T5 -- Decline rate, trailing window  [line]
+// CORRECTION to the implementation guide, recorded not silently applied: the
+// guide asks for 1-minute grain from mv_terminal_activity_5min. That MV buckets
+// at 5 minutes -- 1-minute grain cannot be recovered from it. Reading
+// auth_curated directly would give 1-minute grain but discards the MV, which
+// exists precisely so this page is cheap. The MV is used at its true grain.
+mv_terminal_activity_5min
+| where bucket_5min between (_startTime .. _endTime)
+| summarize auths = sum(auth_count), declines = sum(decline_count) by bucket_5min
+| where auths > 0
+| project bucket_5min, ['Decline rate %'] = round(100.0 * todouble(declines) / todouble(auths), 2)
+| order by bucket_5min asc

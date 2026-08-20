@@ -1,0 +1,24 @@
+// P3 T1 -- Approval rate by issuer, with anomaly band  [anomalychart]
+// The exit-criterion tile: reflex 4 must decompose each issuer against ITS OWN
+// baseline, not a fixed threshold. sigma = 2.5 and step = 1h are the same
+// parameters fn_reflex4_issuer_degradation uses, so this chart and the reflex
+// that writes to `alerts_v2` cannot drift apart.
+// default = double(null) leaves an hour with no traffic as a GAP, not as a 0%
+// approval rate -- a zero here would be a fabricated outage.
+// POINT BUDGET -- measured 2026-08-19. This tile is a SHORT-WINDOW instrument and the platform
+// enforces it. Over a ~89-day reference window the RTD refuses to render:
+//     "Max points exceeded. Query returned 152,640. Maximum recommended is 50,000."
+// which reconciles exactly: 24 issuers x ~2,120 hourly buckets = 50,880 points, and
+// series_decompose_anomalies returns THREE series from it (ApprovalRate, baseline, anomalies).
+// DO NOT widen `step` to fit the window. Contract §7 specifies decomposition at 1h against each
+// issuer's own baseline; a tile that quietly re-bins itself by window width is a different
+// instrument wearing the same caption. Capture this page at a day-scale window.
+let as_of = _endTime;
+let win_start = _startTime;
+mv_issuer_baseline
+| where hour_bucket between (win_start .. as_of)
+| extend approval_rate = todouble(approved) / todouble(max_of(total, 1))
+| make-series ApprovalRate = avg(approval_rate) default = double(null)
+    on hour_bucket from win_start to as_of step 1h by issuer_bin
+| extend (anomalies, score, baseline) = series_decompose_anomalies(ApprovalRate, 2.5)
+| project issuer_bin, hour_bucket, ApprovalRate, baseline, anomalies

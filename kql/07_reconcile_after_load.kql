@@ -1,0 +1,87 @@
+// ============================================================================
+// Project 25 (Meridian Pay) -- Session 3, Phase 2
+// 07_reconcile_after_load.kql             [2026-08-18]
+//
+// The spec reconciliation gate, applied to the ingestion itself. Run this as a
+// SINGLE query (it is one statement) 5+ minutes after the full backfill
+// notebook finishes -- queued ingestion is asynchronous, so an early read
+// undercounts and looks like data loss when it is only lag.
+//
+// EVERY expected number below is MEASURED, not copied from prose:
+//   * raw_* and dim/stg counts   -> Landing_Manifest.csv, full-scale run,
+//     MASTER_SEED=250817, manifest md5 cf1c270b8440bde4c779dd127550e168
+//     (re-verified 2026-08-18 after the datetime64[us] fix -- md5 unchanged).
+//   * curated counts             -> distinct-key counts read directly off the
+//     generated Parquet, 2026-08-18:
+//         auth       5,386,869 raw - 21,477 dupes = 5,365,392 distinct
+//         telemetry  4,337,068 raw - 17,287 dupes = 4,319,781 distinct
+//         dispute        6,715 raw -      0 dupes =     6,715 distinct
+//     These are the numbers DQ rule 1's dedupe must produce. They are the
+//     point of the gate: if auth_curated equals raw_auth_events, the dedupe
+//     silently did nothing, and "no error" would have hidden it.
+//
+// A non-zero delta is a finding, not a rounding issue. Investigate before
+// moving on -- do NOT proceed to E1 with an unreconciled load.
+// ============================================================================
+
+let actual = union
+    (raw_auth_events             | summarize n = count() | extend tbl = 'raw_auth_events'),
+    (raw_auth_events_cold        | summarize n = count() | extend tbl = 'raw_auth_events_cold'),
+    (raw_terminal_telemetry      | summarize n = count() | extend tbl = 'raw_terminal_telemetry'),
+    (raw_terminal_telemetry_cold | summarize n = count() | extend tbl = 'raw_terminal_telemetry_cold'),
+    (raw_dispute_events          | summarize n = count() | extend tbl = 'raw_dispute_events'),
+    (raw_job_events              | summarize n = count() | extend tbl = 'raw_job_events'),
+    (ground_truth                | summarize n = count() | extend tbl = 'ground_truth'),
+    (stg_dim_merchant            | summarize n = count() | extend tbl = 'stg_dim_merchant'),
+    (stg_dim_store               | summarize n = count() | extend tbl = 'stg_dim_store'),
+    (stg_dim_terminal            | summarize n = count() | extend tbl = 'stg_dim_terminal'),
+    (stg_dim_issuer              | summarize n = count() | extend tbl = 'stg_dim_issuer'),
+    (dim_store_calendar          | summarize n = count() | extend tbl = 'dim_store_calendar'),
+    (auth_curated                | summarize n = count() | extend tbl = 'auth_curated'),
+    (telemetry_curated           | summarize n = count() | extend tbl = 'telemetry_curated'),
+    (dispute_curated             | summarize n = count() | extend tbl = 'dispute_curated'),
+    (dim_estate                  | summarize n = count() | extend tbl = 'dim_estate');
+let expected = datatable(tbl: string, exp: long, basis: string)
+[
+    'raw_auth_events',             5386869, 'manifest',
+    'raw_auth_events_cold',        5386819, 'manifest (50-row rule-6 gap by design)',
+    'raw_terminal_telemetry',      4337068, 'manifest',
+    'raw_terminal_telemetry_cold', 4337018, 'manifest (50-row rule-6 gap by design)',
+    'raw_dispute_events',             6715, 'manifest',
+    'raw_job_events',                    0, 'schema-only by design, no Eventstream yet',
+    'ground_truth',                    137, 'manifest (40/25/12/60 by type)',
+    'stg_dim_merchant',                600, 'manifest',
+    'stg_dim_store',                   927, 'manifest',
+    'stg_dim_terminal',               1500, 'manifest',
+    'stg_dim_issuer',                   24, 'manifest',
+    'dim_store_calendar',              7819, 'manifest (multi-session days)',
+    'auth_curated',                5365392, 'distinct auth_id -- dedupe must remove 21,477',
+    'telemetry_curated',           4319781, 'distinct telemetry_id -- dedupe must remove 17,287',
+    'dispute_curated',                6715, 'distinct dispute_id -- 0 dupes expected',
+    'dim_estate',                     1500, 'one row per terminal, zero orphans',
+];
+expected
+| join kind=leftouter (actual) on tbl
+| extend loaded = coalesce(n, 0)
+| extend delta = loaded - exp
+| extend status = case(delta == 0, 'OK', loaded == 0, 'EMPTY -- not loaded?', 'MISMATCH')
+| project tbl, expected = exp, loaded, delta, status, basis
+| order by status asc, tbl asc
+
+// ============================================================================
+// READING THE RESULT
+//
+// All 16 rows 'OK'  -> the load is reconciled. Proceed.
+//
+// auth_curated / telemetry_curated show a POSITIVE delta equal to the dupe
+// count (i.e. they match raw exactly) -> the update policy copied rows but the
+// dedupe did not apply. That is a real defect, not lag.
+//
+// Anything EMPTY after 5+ minutes -> check the failure queue:
+//   .show ingestion failures | where Database == 'EH_MeridianPay' | top 20 by FailedOn desc
+//
+// dim_estate 0 -> expected until you run the rebuild, which is a data command
+// and must run on its own (03_dim_estate_build.kql):
+//   .set-or-replace dim_estate <| fn_build_dim_estate()
+//   fn_check_zero_orphan_terminals() | count      // MUST return 0
+// ============================================================================

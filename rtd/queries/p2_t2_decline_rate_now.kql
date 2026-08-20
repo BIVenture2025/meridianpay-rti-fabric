@@ -1,0 +1,11 @@
+// P2 T2 -- Decline rate now, %  [stat]
+// Same trailing 15 minutes as the auths/sec tile, so the two read the same
+// population. max_of(...,1) guards the empty window: an idle 15 minutes reads
+// 0%, never a divide-by-zero.
+let as_of = _endTime;
+let win = 15m;
+auth_curated
+| where event_type == 'auth'
+| where trusted_time between (as_of - win .. as_of)
+| summarize declines = countif(auth_result == 'declined'), total = count()
+| project Value = round(100.0 * todouble(declines) / todouble(max_of(total, 1)), 1)

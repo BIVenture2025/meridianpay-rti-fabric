@@ -1,0 +1,140 @@
+// ============================================================================
+// Project 25 (Meridian Pay) -- Session 5
+// 13_alerts_remirror_fix.kql                               [NEW -- 2026-08-19]
+//
+// PROBLEM. After 12_alert_grading.kql, `alerts` reads 186 rows in KQL but ZERO
+// rows through the Lakehouse shortcut and the semantic model, while the two new
+// COLUMNS propagated correctly.
+//
+// DIAGNOSIS, from three readings that only make sense together:
+//   * `EH_MeridianPay` Database details: OneLake Availability **Enabled**, Tables
+//     available **19/19**, Latency **Up to date**, Completed **100%**, Pending
+//     size **0B**. The mirror does not think it has work outstanding.
+//   * Lakehouse SQL endpoint: `SELECT TOP 5 alert_id, gt_episode_id,
+//     dispute_confirmed FROM dbo.alerts` -> **3 columns, 0 rows**. The SCHEMA
+//     change arrived; the DATA did not.
+//   * The semantic model agrees: `[Terminals]` = 1500 (dim_estate is fine) while
+//     `[Alerts Raised]` and `[Reflex Types Fired]` are BLANK.
+//
+// Columns present + zero rows is not a sync lag. A lag shows stale COLUMNS. This
+// is a mirrored Delta table that has been emptied and not refilled.
+//
+// The cause is step 4 of 12_alert_grading.kql: `.set-or-replace`. That is an
+// EXTENT-REPLACE operation -- Kusto swaps the table's extents rather than
+// ingesting rows. OneLake availability mirrors INGESTION; extent-level moves and
+// replaces are not guaranteed to propagate. The mirror correctly dropped the old
+// extents and never received the new ones, then reported itself up to date
+// because, from its point of view, it was.
+//
+// **Nothing is lost.** The 186 graded rows are intact in the KQL table; only the
+// mirror is empty. This file re-states them as a genuine ingestion, which the
+// mirror does propagate.
+//
+// WHY NOT `.drop table` + recreate: the Lakehouse shortcut points at this table's
+// OneLake path. Dropping the table risks breaking the shortcut and, with it, the
+// semantic model binding that gate C2 was closed on. `.clear table ... data`
+// leaves the table object -- and therefore the shortcut -- untouched.
+//
+// RUN ONE STATEMENT AT A TIME. Read every count before continuing.
+// ============================================================================
+
+
+// ---- STEP 0: confirm the premise before acting on it -----------------------
+// If this is not 186, STOP -- the problem is not the mirror and this file is the
+// wrong fix.
+
+alerts | count
+
+alerts | summarize firings = count(), graded = countif(gt_episode_id != '') by reflex_type
+// Expect 72/72, 95/2, 10/10, 9/0 -- the grading from 2026-08-19.
+
+
+// ---- STEP 1: snapshot the graded rows --------------------------------------
+// This is the only copy while step 2 runs. Do not skip it, and do not drop it
+// until step 5 has been read back.
+
+.set alerts_regrade_snapshot <| alerts
+
+alerts_regrade_snapshot | count
+// MUST be 186. Do not proceed on anything else.
+
+
+// ---- STEP 2: empty the table -----------------------------------------------
+// The mirror already shows zero rows, so this changes nothing downstream. What it
+// does is put the KQL table into a state where step 3 is a genuine ingestion
+// rather than another extent swap.
+
+.clear table alerts data
+
+alerts | count
+// Expect 0.
+
+
+// ---- STEP 3: re-ingest, as an append ---------------------------------------
+// `.set-or-append` ingests rows. This is the operation OneLake availability is
+// built to mirror, and the whole point of the detour.
+
+.set-or-append alerts <| alerts_regrade_snapshot
+
+alerts | count
+// MUST be 186 again. If it is not, restore with:
+//   .set-or-replace alerts <| alerts_regrade_snapshot
+// and stop -- that at least returns the KQL side to a correct state.
+
+
+// ---- STEP 4: wait for the mirror, then read it from the far side -----------
+// Give it a few minutes. Watch `EH_MeridianPay` -> Database details -> OneLake:
+// Pending size should rise above 0B and then settle back, which is itself the
+// evidence that this time there WAS something to mirror.
+//
+// Then, in LH_MeridianPay's SQL analytics endpoint -- NOT in KQL, the whole point
+// is to read through the path that was broken:
+//
+//   SELECT COUNT(*) FROM dbo.alerts;
+//
+// EXPECT 186. This is the check that actually matters; `alerts | count` returning
+// 186 in KQL is what it said before the fix too.
+
+
+// ---- STEP 5: re-read through the semantic model -----------------------------
+// One more layer out. In SM_MeridianPay_DirectLake -> DAX query view:
+//
+//   EVALUATE ROW ( "Alerts Raised", [Alerts Raised], "Terminals", [Terminals] )
+//
+// EXPECT 186 and 1500. If the SQL endpoint says 186 but DAX still says BLANK, the
+// model is holding a cached empty frame -- Edit tables -> untick `alerts` -> OK ->
+// Edit tables -> tick `alerts` -> OK, and re-run.
+
+
+// ---- STEP 6: drop the snapshot, only after step 5 reads 186 ----------------
+
+.drop table alerts_regrade_snapshot
+
+
+// ============================================================================
+// STANDING CONSEQUENCE -- this is not a one-off.
+//
+// **Do not use `.set-or-replace` on any table whose OneLake mirror something
+// downstream depends on.** It is silent: KQL is correct, the mirror reports
+// itself up to date, and the emptiness only surfaces two layers away in a
+// semantic model. The safe idiom for a full rewrite of a mirrored table is the
+// one in this file -- snapshot, `.clear table ... data`, `.set-or-append`.
+//
+// Where this bites again in this project:
+//   * `12_alert_grading.kql` step 4 uses `.set-or-replace alerts`. Anyone
+//     re-running the regrade must follow it with this file, or use the
+//     clear+append idiom in place of step 4.
+//   * `03_dim_estate_build.kql` uses `.set-or-replace dim_estate` and
+//     `dim_estate` IS shortcut into the Lakehouse. It currently reads 1,500
+//     through the model, so it is fine today -- because it was last written
+//     BEFORE OneLake availability was enabled, and the initial mirror copied the
+//     table wholesale. **A future `.set-or-replace dim_estate` would empty it the
+//     same way.**
+//   * `08_dedupe_fix.kql` and `10_streaming_dedupe_maintenance.kql` both rewrite
+//     `auth_curated` / `telemetry_curated` with staged replaces, and both of those
+//     tables are shortcut into the Lakehouse. **The contract addendum says to run
+//     `10_streaming_dedupe_maintenance.kql` again before E3** -- doing that as
+//     written would empty both mirrors on the eve of the export checkpoint.
+//     Convert it to clear+append first, or re-run this file's idiom against both
+//     tables afterwards and verify through the SQL endpoint.
+// ============================================================================

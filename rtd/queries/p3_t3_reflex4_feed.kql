@@ -1,0 +1,18 @@
+// P3 T3 -- Reflex 4 firings, issuer_degradation  [table]
+// Reflex 4 rows are the one reflex_type where entity_type is 'issuer' and
+// merchant_id / store_id are deliberately empty strings -- no single merchant
+// owns an issuer. entity_id carries the issuer_bin, joined here to
+// stg_dim_issuer for a readable name.
+alerts_v2
+| where reflex_type == 'issuer_degradation'
+| where window_start between (_startTime .. _endTime)
+| join kind=leftouter (stg_dim_issuer | project issuer_bin, issuer_name)
+    on $left.entity_id == $right.issuer_bin
+| order by window_start desc
+| project ['Issuer BIN'] = entity_id,
+          Issuer = issuer_name,
+          Hour = window_start,
+          ['Approval rate'] = round(signal_value, 3),
+          ['Own baseline'] = round(threshold_value, 3),
+          ['Shortfall'] = round(threshold_value - signal_value, 3)
+| take 200

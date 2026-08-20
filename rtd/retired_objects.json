@@ -1,0 +1,13 @@
+{
+  "_note": "Objects that EXIST in 02_KQL/*.kql DDL but no longer exist in the live Eventhouse. The DDL catalogue check_rtd_queries.py builds cannot see a drop performed in the portal, so a tile can reference a table that parses, resolves, and errors at render. Declare the drop here and the checker fails on it. Every entry must name a replacement that IS in the catalogue -- an entry with no live successor would silently pass.",
+  "retired": [
+    {
+      "name": "alerts",
+      "kind": "table",
+      "retired_on": "2026-08-19",
+      "retired_in": "Session 7, portal .drop table alerts",
+      "replacement": "alerts_v2",
+      "reason": "The Session 6 regrade rebuilt the graded alert rows as alerts_v2. The Lakehouse shortcut named 'alerts' points at .../Tables/alerts_v2, so OneLake and the semantic model still see the name; the Eventhouse does not. .rename tables was refused while the mirroring policy was enabled, so the two names could not be reconciled and the RTD tiles were left pointing at a table that had been dropped. Three tiles errored in the portal before this file existed."
+    }
+  ]
+}

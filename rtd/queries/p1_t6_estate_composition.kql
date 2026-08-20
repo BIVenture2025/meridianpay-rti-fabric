@@ -1,0 +1,22 @@
+// P1 T6 -- Estate composition  [pie]
+// Three buckets, matching the mockup. The distinction that matters: a silent
+// terminal whose store is CLOSED is "Live, off-hours", not "Dark" -- that is
+// reflex 3's own definition, and reporting it any other way would inflate the
+// outage count every night.
+let as_of = _endTime;
+let dark_minutes = 20;
+let gen_dow = (toint(dayofweek(as_of) / 1d) + 6) % 7;
+let tod = as_of - startofday(as_of);
+let open_now = fn_store_open_sessions()
+    | where day_of_week == gen_dow
+    | where tod between (open_ts .. close_ts)
+    | distinct store_id;
+mv_terminal_last_seen
+| extend minutes_dark = datetime_diff('minute', as_of, trusted_time)
+| extend trading = store_id in (open_now)
+| extend Bucket = case(
+    trading and minutes_dark >= dark_minutes, 'Dark / overdue',
+    trading, 'Live & trading',
+    'Live, off-hours')
+| summarize Terminals = count() by Bucket
+| order by Terminals desc
