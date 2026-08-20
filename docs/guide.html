@@ -112,7 +112,7 @@ footer{border-top:1px solid var(--line);padding-top:26px;margin-top:56px;font-si
  <div class="brand"><small>Guided walkthrough</small>Build a real-time payments risk platform on Microsoft Fabric</div>
  <div class="prog"><div class="progbar"><div class="progfill"></div></div>
   <div class="progtxt">0 of 9 steps done</div></div>
- <nav class="nav"><div class="grp">The project</div><a href="#why">Why anyone builds this</a><a href="#arch">What you are building</a><div class="grp">The build</div><a href="#s1">Set up the workspace</a><a href="#s2">Generate the estate and the events</a><a href="#s3">Create the Eventhouse and land the backfill</a><a href="#s4">Build the transformation layer in KQL</a><a href="#s5">Six stream data-quality rules</a><a href="#s6">Four reflexes, and Activator</a><a href="#s7">The Real-Time Dashboard</a><a href="#s8">Make the data readable by Power BI</a><a href="#s9">Grade the alerts</a><div class="grp">Reference</div><a href="#traps">Every trap</a><a href="#limits">What this does not do</a></nav>
+ <nav class="nav"><div class="grp">The project</div><a href="#why">Why anyone builds this</a><a href="#arch">What you are building</a><a href="#code">Get the code</a><div class="grp">The build</div><a href="#s1">Set up the workspace</a><a href="#s2">Generate the estate and the events</a><a href="#s3">Create the Eventhouse and land the backfill</a><a href="#s4">Build the transformation layer in KQL</a><a href="#s5">Six stream data-quality rules</a><a href="#s6">Four reflexes, and Activator</a><a href="#s7">The Real-Time Dashboard</a><a href="#s8">Make the data readable by Power BI</a><a href="#s9">Grade the alerts</a><div class="grp">Reference</div><a href="#traps">Every trap</a><a href="#limits">What this does not do</a></nav>
  <label class="tog"><input type="checkbox" id="trapOnly"> Show only the gotchas</label>
 </aside>
 <main class="main">
@@ -120,7 +120,7 @@ footer{border-top:1px solid var(--line);padding-top:26px;margin-top:56px;font-si
 <div class="hero" id="top">
  <div class="kick">Microsoft Fabric · Real-Time Intelligence · Guided walkthrough</div>
  <h1>Catch the fraud while it is happening — then prove you were right</h1>
- <p class="lede">Follow along and you will build a working real-time payments risk platform: ten
+ <p class="lede">Follow along and you will build a working real-time payments risk platform: nearly ten
  million events in an event database, four detection rules firing on patterns instead of schedules,
  a live operator dashboard — and, when the chargebacks arrive two months later, a report that grades
  every alert the platform raised and publishes its own precision. No prior Fabric experience assumed,
@@ -152,7 +152,7 @@ baseline.</p>
 <section id="arch"><h2>What you are building</h2>
 <p class="sub">Nine Fabric items. The unusual thing about the shape is what is <i>missing</i> from it.</p>
 <table><thead><tr><th style="width:30%">Item</th><th>Its job</th></tr></thead><tbody>
-<tr><td><b>Eventhouse + KQL database</b></td><td>The system of record for events. Ten million rows, queried in milliseconds</td></tr>
+<tr><td><b>Eventhouse + KQL database</b></td><td>The system of record for events. 9.7m events, queried in milliseconds</td></tr>
 <tr><td><b>Update policies + materialized views</b></td><td><b>The transformation layer</b> — this replaces Bronze/Silver/Gold notebooks entirely</td></tr>
 <tr><td><b>KQL Queryset + functions</b></td><td>The detection rules, the DQ checks, and the estate hierarchy</td></tr>
 <tr><td><b>Real-Time Dashboard ×3 pages</b></td><td>The operator's surface</td></tr>
@@ -163,6 +163,23 @@ baseline.</p>
 <tr><td><b>Git integration</b></td><td>Every item definition on disk as you build it</td></tr>
 </tbody></table>
 <div class="note"><b>One Spark notebook in the whole build</b>, and it only loads the backfill. If you have built on Fabric before, that is the number to notice.</div>
+</section>
+
+<section id="code"><h2>Get the code</h2>
+<p class="sub">Everything the steps below tell you to run is in one public repository, MIT licensed,
+no sign-up. <b>Get it before step 2</b> — that is the step that needs it.</p>
+<div class="win"><b><a href="https://github.com/BIVenture2025/meridianpay-rti-fabric">github.com/BIVenture2025/meridianpay-rti-fabric</a></b> &nbsp;&middot;&nbsp; <a href="https://github.com/BIVenture2025/meridianpay-rti-fabric/archive/refs/heads/main.zip"><b>Download the repository as a ZIP</b></a> &nbsp;&middot;&nbsp; or clone it and install the generator's dependencies:</div><div class="code"><pre>git clone https://github.com/BIVenture2025/meridianpay-rti-fabric.git
+cd meridianpay-rti-fabric
+pip install -r notebooks/requirements.txt</pre></div>
+<table><thead><tr><th style="width:22%">Folder</th><th>What is in it</th></tr></thead><tbody>
+<tr><td><code>notebooks/</code></td><td>The event generator — seeded, versioned and byte-reproducible — and the one Spark notebook that loads the backfill</td></tr>
+<tr><td><code>kql/</code></td><td><b>18 scripts, numbered in run order.</b> Tables, update policies, materialized views, functions, DQ rules, reflexes, grading</td></tr>
+<tr><td><code>rtd/</code></td><td>The Real-Time Dashboard as source: a spec, one <code>.kql</code> per tile, a builder and a checker</td></tr>
+<tr><td><code>model/</code></td><td>Measures as code, the TMDL, and the guarded-measure declaration the linter reads</td></tr>
+<tr><td><code>report/</code></td><td>The Power BI report as a generator script</td></tr>
+<tr><td><code>docs/</code></td><td>Architecture, the data contract, the read-back, the post-mortem, plan-versus-actual and cost</td></tr>
+</tbody></table>
+<div class="note"><b>The numbering in <code>kql/</code> is the run order</b>, and each step below names the file it belongs to. If you only open three things first: <code>notebooks/generator/backfill.py</code> builds the estate, <code>kql/01_update_policies.kql</code> is the transformation layer, and <code>kql/12_alert_grading.kql</code> is the part that makes this a platform rather than a demo.</div>
 </section>
 
 <section id="s1"><div class="step">
@@ -359,7 +376,9 @@ pass.</li>
 <footer>
  <p>Written by Yeong Wai Son. Synthetic data throughout; Meridian Pay is fictional and no figure
  represents a real company or a real cardholder.</p>
- <p style="margin-top:8px">Progress ticks are in-memory only and reset when you reload.</p>
+ <p style="margin-top:8px">Every script in this guide is at
+ <a href="https://github.com/BIVenture2025/meridianpay-rti-fabric">github.com/BIVenture2025/meridianpay-rti-fabric</a>. Progress ticks are in-memory
+ only and reset when you reload.</p>
 </footer>
 </main></div>
 <script>

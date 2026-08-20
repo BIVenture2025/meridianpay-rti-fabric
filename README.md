@@ -3,7 +3,8 @@
 **A card acquirer's fraud and availability platform, built end to end on Fabric Real-Time
 Intelligence — and it grades its own alerts.**
 
-Ten million payment events land in an Eventhouse. Four detection rules fire on patterns in the
+Nine and three-quarter million payment events land in an Eventhouse — 5,386,869 authorisations,
+4,337,068 telemetry rows and 6,715 disputes. Four detection rules fire on patterns in the
 stream rather than on a schedule. A live dashboard shows an operator what is happening right now.
 And when the chargebacks arrive thirty to sixty days later, the platform goes back over every alert
 it raised and **publishes its own precision** — by cohort of how mature the evidence is, never as
